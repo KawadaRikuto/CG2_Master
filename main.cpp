@@ -25,6 +25,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg,
 		return 0;
 	}
 
+
 	// 標準のメッセージ処理を行う
 	return DefWindowProc(hwnd, msg, wparam, lparam);
 }
