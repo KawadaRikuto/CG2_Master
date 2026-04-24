@@ -187,7 +187,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int){
 		if (!(adapterDesc.Flags & DXGI_ADAPTER_FLAG3_SOFTWARE)) {
 
 			// 採用したアダプタの情報をログに出力。wstringの方なので注意
-			Log(std::format(L"Use Adapter:{}\n", adapterDesc.Description));
+			Log(logStream, ConvertString(std::format(L"Use Adapter:{}\n", adapterDesc.Description)));
 
 			break;
 
@@ -230,7 +230,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int){
 
 	// デバイスの生成がうまくいかなかったので起動できない
 	assert(device != nullptr);
-	Log("Complete create D3D12Device!!!\n"); //初期化完了のログを出す
+	Log(logStream, "Complete create D3D12Device!!!\n"); //初期化完了のログを出す
 
 	// ウィンドウの×ボタンが押されるまでループ
 	while (msg.message != WM_QUIT) {
