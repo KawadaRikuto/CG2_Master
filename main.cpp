@@ -222,8 +222,10 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int){
 
 		// 指定した機能レベルでデバイスが生成出来たかを確認
 		if (SUCCEEDED(hr)) {
+
 			// 生成出来たのでログに出力してループを抜ける
 			Log(std::format("FeatureLevel : {}\n", featureLevelStrings[i]));
+			
 			break;
 		}
 	}
