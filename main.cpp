@@ -1,3 +1,4 @@
+#define USE_IMGUI
 #pragma warning(push)
 // C4023の警告をみなかったことにする
 #pragma warning(disable: 4023)
@@ -21,10 +22,12 @@
 #pragma comment(lib, "dxguid.lib")
 #include<dxcapi.h>
 #pragma comment(lib, "dxcompiler.lib")
+#ifdef USE_IMGUI
 #include "externals/imgui/imgui.h"
 #include "externals/imgui/imgui_impl_dx12.h"
 #include "externals/imgui/imgui_impl_win32.h"
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+#endif
 #pragma warning(pop)
 
 struct Vector3 {
@@ -54,10 +57,12 @@ struct Transform {
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg,
 	WPARAM wparam, LPARAM lparam) {
 
+#ifdef USE_IMGUI
 	// ImGuiのウィンドウプロシージャハンドラを呼び出す
 	if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam)) {
 		return true;
 	}
+#endif
 
 	// メッセージに応じてゲーム固有の処理を行う
 	switch (msg) {
@@ -768,6 +773,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int){
 
 	Transform transform{ {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f} };
 
+#ifdef USE_IMGUI
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 	ImGui::StyleColorsDark();
@@ -775,7 +781,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int){
 	ImGui_ImplDX12_Init(device, swapChainDesc.BufferCount, rtvDesc.Format, srvDescriptorHeap, srvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(), srvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
 	ImGuiIO& io = ImGui::GetIO();
 	io.Fonts->Build();
-
+#endif
 
 
 	// ウィンドウの×ボタンが押されるまでループ
@@ -785,12 +791,15 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int){
 			TranslateMessage(&msg);
 			DispatchMessage(&msg);
 		} else {
+			
+#ifdef USE_IMGUI
 
 			ImGui_ImplDX12_NewFrame();
 			ImGui_ImplWin32_NewFrame();
 			ImGui::NewFrame();
 
 			ImGui::ShowDemoWindow();
+#endif
 
 			// これから書き込むバックバッファのインデックスを取得
 			UINT backBufferIndex = swapChain->GetCurrentBackBufferIndex();
@@ -810,6 +819,9 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int){
 			float clearColor[] = { 0.1f, 0.25f, 0.5f, 1.0f }; // 背景クリア
 			commandList->ClearRenderTargetView(rtvHandles[backBufferIndex], clearColor, 0, nullptr);
 
+			ID3D12DescriptorHeap* descriptorHeaps[] = { srvDescriptorHeap };
+			commandList->SetDescriptorHeaps(1, descriptorHeaps);
+
 			commandList->RSSetViewports(1, &viewport);
 			commandList->RSSetScissorRects(1, &scissorRect);
 			commandList->SetGraphicsRootSignature(rootSignature);
@@ -825,13 +837,11 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int){
 
 			// 三角形を描画
 			commandList->DrawInstanced(3, 1, 0, 0);
-
+			
+#ifdef USE_IMGUI
 			ImGui::Render();
-
-			ID3D12DescriptorHeap* descriptorHeaps[] = { srvDescriptorHeap };
-			commandList->SetDescriptorHeaps(1, descriptorHeaps);
-
 			ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), commandList);
+#endif
 
 			// --- 3. 画面に映す準備 ---
 			// 状態をRenderTargetからPresentへ戻す
@@ -861,9 +871,12 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int){
 		}
 	}
 
+#ifdef USE_IMGUI
+
 	ImGui_ImplDX12_Shutdown();
 	ImGui_ImplWin32_Shutdown();
 	ImGui::DestroyContext();
+#endif
 
 	CloseHandle(fenceEvent);
 	fence->Release();
