@@ -286,6 +286,12 @@ static LONG WINAPI MyUnhandledExceptionFilter(struct _EXCEPTION_POINTERS* except
 	}
 
 
+DirectX::ScratchImage LoadTexure(const std::string& fillePath) {
+
+	DirectX::ScratchImage image{};
+
+}
+
 
 // windowsアプリでのエントリーポイント(main関数)
 int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int){
