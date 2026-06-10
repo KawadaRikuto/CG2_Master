@@ -84,7 +84,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg,
 		return 0;
 	}
 
-
 	// 標準のメッセージ処理を行う
 	return DefWindowProc(hwnd, msg, wparam, lparam);
 }
@@ -168,14 +167,12 @@ void Log(std::ostream& os, const std::string& message) {
 	OutputDebugStringA(message.c_str());
 }
 
-
 IDxcBlob* CompileShader(const std::wstring& filePath, const wchar_t* profile, IDxcUtils* dxcUtils, IDxcCompiler3* dxcCompiler, IDxcIncludeHandler* includeHandler)
 {
 	Log(ConvertString(std::format(L"Begin CompileShader, path:{}, profile:{}\n", filePath, profile)));
 	IDxcBlobEncoding* shaderSource = nullptr;
 	HRESULT hr = dxcUtils->LoadFile(filePath.c_str(), nullptr, &shaderSource);
 
-	// もしファイルがない場合はassertで落とさず、ログを出してNULLを返す
 	if (FAILED(hr)) {
 		Log(ConvertString(std::format(L"【エラー】シェーダーファイルが見つかりません: {}\n", filePath)));
 		return nullptr;
@@ -263,7 +260,7 @@ ID3D12Resource* CreateDepthStencilTextureResource(ID3D12Device* device, int32_t 
 	resourceDesc.Height = height;
 	resourceDesc.MipLevels = 1;
 	resourceDesc.DepthOrArraySize = 1;
-	resourceDesc.Format = DXGI_FORMAT_D32_FLOAT;
+	resourceDesc.Format = DXGI_FORMAT_D32_FLOAT; // 深度フォーマット
 	resourceDesc.SampleDesc.Count = 1;
 	resourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
 	resourceDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
@@ -273,7 +270,7 @@ ID3D12Resource* CreateDepthStencilTextureResource(ID3D12Device* device, int32_t 
 
 	D3D12_CLEAR_VALUE depthClearValue{};
 	depthClearValue.DepthStencil.Depth = 1.0f;
-	depthClearValue.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+	depthClearValue.Format = DXGI_FORMAT_D32_FLOAT; // フォーマットをresourceDescと一致させる
 
 	ID3D12Resource* resource = nullptr;
 	HRESULT hr = device->CreateCommittedResource(
@@ -285,10 +282,10 @@ ID3D12Resource* CreateDepthStencilTextureResource(ID3D12Device* device, int32_t 
 		IID_PPV_ARGS(&resource));
 	assert(SUCCEEDED(hr));
 
-	//ID3D12Resource* depthStencilResource = CreateDepthStencilTextureResource(device, width, height);
-
 	return resource;
 }
+
+// 【修正】重複していたDepthFunc関数およびループ外の不要な判定・コマンドを削除しました。
 
 static LONG WINAPI MyUnhandledExceptionFilter(struct _EXCEPTION_POINTERS* exception) {
 	std::filesystem::create_directory("Dumps");
@@ -315,7 +312,6 @@ static LONG WINAPI MyUnhandledExceptionFilter(struct _EXCEPTION_POINTERS* except
 
 	return EXCEPTION_EXECUTE_HANDLER;
 }
-
 
 bool LoadTexture(const std::string& filePath, DirectX::ScratchImage& outMipImages) {
 	DirectX::ScratchImage image{};
@@ -347,7 +343,6 @@ ID3D12Resource* CreateTextureResource(ID3D12Device* device, const DirectX::TexMe
 	D3D12_HEAP_PROPERTIES heapProperties{};
 	heapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
 
-
 	ID3D12Resource* resource = nullptr;
 	HRESULT hr = device->CreateCommittedResource(
 		&heapProperties,
@@ -372,7 +367,7 @@ ID3D12Resource* UploadTextureData(
 	DirectX::PrepareUpload(device, mipImages.GetImages(), mipImages.GetImageCount(), mipImages.GetMetadata(), subresources);
 	uint64_t intermediaateSize = GetRequiredIntermediateSize(texture, 0, UINT(subresources.size()));
 	ID3D12Resource* intermediateResource = CreateBufferResource(device, intermediaateSize);
-	
+
 	UpdateSubresources(commandList, texture, intermediateResource, 0, 0, UINT(subresources.size()), subresources.data());
 
 	D3D12_RESOURCE_BARRIER barrier{};
@@ -386,7 +381,6 @@ ID3D12Resource* UploadTextureData(
 
 	return intermediateResource;
 }
-
 
 int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 
@@ -484,7 +478,6 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 		infoQueue->Release();
 	}
 #endif
-
 	ID3D12CommandQueue* commandQueue = nullptr;
 	D3D12_COMMAND_QUEUE_DESC commandQueueDesc{};
 	hr = device->CreateCommandQueue(&commandQueueDesc, IID_PPV_ARGS(&commandQueue));
@@ -641,6 +634,13 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 		graphicsPipelineStateDesc.BlendState = blendDesc;
 		graphicsPipelineStateDesc.NumRenderTargets = 1;
 		graphicsPipelineStateDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+
+		// 深度ステンシルフォーマットの設定を追加
+		graphicsPipelineStateDesc.DepthStencilState.DepthEnable = TRUE;
+		graphicsPipelineStateDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+		graphicsPipelineStateDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+		graphicsPipelineStateDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+
 		graphicsPipelineStateDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 		graphicsPipelineStateDesc.SampleDesc.Count = 1;
 		graphicsPipelineStateDesc.SampleMask = D3D12_DEFAULT_SAMPLE_MASK;
@@ -685,13 +685,14 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 #endif
 
 	// テクスチャ読み込み
-	DirectX::ScratchImage mioImages;
+	DirectX::ScratchImage mipImages;
 	ID3D12Resource* textureResource = nullptr;
+	ID3D12Resource* intermediateResource = nullptr;
 	if (msg.message != WM_QUIT) {
-		if (LoadTexture("resources/uvChecker.png", mioImages)) {
-			const DirectX::TexMetadata& metadata = mioImages.GetMetadata();
+		if (LoadTexture("resources/uvChecker.png", mipImages)) {
+			const DirectX::TexMetadata& metadata = mipImages.GetMetadata();
 			textureResource = CreateTextureResource(device, metadata);
-			ID3D12Resource* intermediateResource = UploadTextureData(textureResource, mioImages, device, commandList);
+			intermediateResource = UploadTextureData(textureResource, mipImages, device, commandList);
 
 			D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
 			srvDesc.Format = metadata.format;
@@ -722,11 +723,21 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 
 	vertexData[3].position = { -0.5f, -0.5f, 0.5f, 1.0f };
 	vertexData[3].texcoord = { 0.0f, 1.0f };
-	vertexData[4].position = { 0.0f, 0.5f, 0.0f, 1.0f };
+	vertexData[4].position = { 0.0f, 0.0f, 0.0f, 1.0f };
 	vertexData[4].texcoord = { 0.5f, 0.0f };
 	vertexData[5].position = { 0.5f, -0.5f, -0.5f, 1.0f };
 	vertexData[5].texcoord = { 1.0f, 1.0f };
 
+	// 深度バッファを生成する関数を呼び出し、戻り値を受け取る
+	ID3D12Resource* depthStencilResource = CreateDepthStencilTextureResource(device, kClientWidth, kClientHeight);
+	ID3D12DescriptorHeap* dsvDescriptorHeap = CreateDescriptorHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1, false);
+
+	D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+	dsvDesc.Format = DXGI_FORMAT_D32_FLOAT; // 深度フォーマットに合わせる
+	dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+
+	D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = dsvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+	device->CreateDepthStencilView(depthStencilResource, &dsvDesc, dsvHandle);
 
 	// メインループ
 	while (msg.message != WM_QUIT) {
@@ -751,14 +762,20 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
 			barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 			commandList->ResourceBarrier(1, &barrier);
-			
-		
+
 			Matrix4x4 worldMatrix = MakeAffineMatrix(transform.scale, transform.rotate, transform.translate);
 			*wvpData = worldMatrix;
 
-			commandList->OMSetRenderTargets(1, &rtvHandles[backBufferIndex], FALSE, nullptr);
+			// 回転
+			transform.rotate.y -= 0.005f;
+
+			// レンダーターゲット出力にRTVと深度バッファ(dsvHandle)を指定する
+			commandList->OMSetRenderTargets(1, &rtvHandles[backBufferIndex], FALSE, &dsvHandle);
+
 			float clearColor[] = { 0.1f, 0.25f, 0.5f, 1.0f };
 			commandList->ClearRenderTargetView(rtvHandles[backBufferIndex], clearColor, 0, nullptr);
+			// 毎フレーム深度バッファをクリアする処理を追加
+			commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
 			ID3D12DescriptorHeap* descriptorHeaps[] = { srvDescriptorHeap };
 			commandList->SetDescriptorHeaps(1, descriptorHeaps);
@@ -774,7 +791,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			commandList->SetGraphicsRootConstantBufferView(1, wvpResource->GetGPUVirtualAddress());
 			commandList->SetGraphicsRootDescriptorTable(2, textureSrvHandleGPU);
 
-			commandList->DrawInstanced(3, 1, 0, 0);
+			commandList->DrawInstanced(6, 1, 0, 0);
 
 #ifdef USE_IMGUI
 			ImGui::Render();
@@ -809,10 +826,12 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	ImGui::DestroyContext();
 #endif
 
-	
+	// 後始末（COMリソースの安全な解放）
 	if (fenceEvent) CloseHandle(fenceEvent);
 	if (fence) fence->Release();
 
+	if (dsvDescriptorHeap) dsvDescriptorHeap->Release();
+	if (depthStencilResource) depthStencilResource->Release();
 	if (rtvDescriptorHeap) rtvDescriptorHeap->Release();
 	if (srvDescriptorHeap) srvDescriptorHeap->Release();
 
@@ -820,6 +839,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	if (swapChainResources[1]) swapChainResources[1]->Release();
 	if (swapChain) swapChain->Release();
 
+	if (intermediateResource) intermediateResource->Release();
 	if (textureResource) textureResource->Release();
 	if (vertexResource) vertexResource->Release();
 	if (materialResource) materialResource->Release();
@@ -846,7 +866,8 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 #endif
 
 	CloseWindow(hwnd);
-	
+
+	// リーク情報の出力
 	IDXGIDebug1* dxgiDebug = nullptr;
 	if (SUCCEEDED(DXGIGetDebugInterface1(0, IID_PPV_ARGS(&dxgiDebug)))) {
 		dxgiDebug->ReportLiveObjects(DXGI_DEBUG_ALL, DXGI_DEBUG_RLO_ALL);
