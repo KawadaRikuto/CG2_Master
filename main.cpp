@@ -22,6 +22,8 @@
 #include<dxcapi.h>
 #pragma comment(lib, "dxcompiler.lib")
 #include <DirectXTex.h>
+#define _USE_MATH_DEFINES
+#include <math.h>
 #ifdef USE_IMGUI
 #include "externals/imgui/imgui.h"
 #include "externals/imgui/imgui_impl_dx12.h"
@@ -131,22 +133,27 @@ Matrix4x4 MakeAffineMatrix(
 {
 	Matrix4x4 result{};
 
+	float cosX = cosf(rotate.x);
+	float sinX = sinf(rotate.x);
 	float cosY = cosf(rotate.y);
 	float sinY = sinf(rotate.y);
+	float cosZ = cosf(rotate.z);
+	float sinZ = sinf(rotate.z);
 
-	result.m[0][0] = scale.x * cosY;
-	result.m[0][1] = 0.0f;
-	result.m[0][2] = scale.x * sinY;
+	// 回転行列 XYZ結合
+	result.m[0][0] = scale.x * (cosY * cosZ);
+	result.m[0][1] = scale.x * (cosY * sinZ);
+	result.m[0][2] = scale.x * (-sinY);
 	result.m[0][3] = 0.0f;
 
-	result.m[1][0] = 0.0f;
-	result.m[1][1] = scale.y;
-	result.m[1][2] = 0.0f;
+	result.m[1][0] = scale.y * (sinX * sinY * cosZ - cosX * sinZ);
+	result.m[1][1] = scale.y * (sinX * sinY * sinZ + cosX * cosZ);
+	result.m[1][2] = scale.y * (sinX * cosY);
 	result.m[1][3] = 0.0f;
 
-	result.m[2][0] = -scale.z * sinY;
-	result.m[2][1] = 0.0f;
-	result.m[2][2] = scale.z * cosY;
+	result.m[2][0] = scale.z * (cosX * sinY * cosZ + sinX * sinZ);
+	result.m[2][1] = scale.z * (cosX * sinY * sinZ - sinX * cosZ);
+	result.m[2][2] = scale.z * (cosX * cosY);
 	result.m[2][3] = 0.0f;
 
 	result.m[3][0] = translate.x;
@@ -600,12 +607,15 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	descriptionRootSignature.pStaticSamplers = &staticSampler;
 	descriptionRootSignature.NumStaticSamplers = 1;
 
-	ID3D12Resource* vertexResource = CreateBufferResource(device, sizeof(VertexData) * 6);
-	ID3D12Resource* materialResource = CreateBufferResource(device, sizeof(Vector4));
+	// --- 【球（Sphere）描画のための定義と頂点リソースの割り当て】 ---
+	const uint32_t kSubdivision = 16; // 分割数
+	const uint32_t kNumSphereVertices = kSubdivision * kSubdivision * 6; // 球の全頂点数
+	ID3D12Resource* vertexResource = CreateBufferResource(device, sizeof(VertexData) * kNumSphereVertices);
 
+	ID3D12Resource* materialResource = CreateBufferResource(device, sizeof(Vector4));
 	Vector4* materialData = nullptr;
 	materialResource->Map(0, nullptr, reinterpret_cast<void**>(&materialData));
-	*materialData = { 1.0f, 0.0f, 0.0f, 1.0f };
+	*materialData = { 1.0f, 1.0f, 1.0f, 1.0f }; // 初期カラーは白
 
 	ID3DBlob* signatureBlob = nullptr;
 	ID3DBlob* errorBlob = nullptr;
@@ -674,7 +684,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 
 	D3D12_VERTEX_BUFFER_VIEW vertexBufferView{};
 	vertexBufferView.BufferLocation = vertexResource->GetGPUVirtualAddress();
-	vertexBufferView.SizeInBytes = sizeof(VertexData) * 6;
+	vertexBufferView.SizeInBytes = sizeof(VertexData) * kNumSphereVertices;
 	vertexBufferView.StrideInBytes = sizeof(VertexData);
 
 	D3D12_VIEWPORT viewport{};
@@ -696,7 +706,8 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	wvpResource->Map(0, nullptr, reinterpret_cast<void**>(&wvpData));
 	*wvpData = MakeIdentity4x4();
 
-	Transform transform{ {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f} };
+	// 初期位置で画面中央からずらして球が見えなくならないように Z を引く (-5.0f など)
+	Transform transform{ {0.25f, 0.25f, 0.25f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, -5.0f} };
 
 #ifdef USE_IMGUI
 	IMGUI_CHECKVERSION();
@@ -736,28 +747,57 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU = srvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
 	textureSrvHandleGPU.ptr += device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
+	// --- 【球（Sphere）頂点データの生成処理】 ---
 	VertexData* vertexData = nullptr;
 	vertexResource->Map(0, nullptr, reinterpret_cast<void**>(&vertexData));
-	vertexData[0].position = { -0.5f, -0.5f, 0.0f, 1.0f };
-	vertexData[0].texcoord = { 0.0f, 1.0f };
-	vertexData[1].position = { 0.0f, 0.5f, 0.0f, 1.0f };
-	vertexData[1].texcoord = { 0.5f, 0.0f };
-	vertexData[2].position = { 0.5f, -0.5f, 0.0f, 1.0f };
-	vertexData[2].texcoord = { 1.0f, 1.0f };
 
-	vertexData[3].position = { -0.5f, -0.5f, 0.5f, 1.0f };
-	vertexData[3].texcoord = { 0.0f, 1.0f };
-	vertexData[4].position = { 0.0f, 0.0f, 0.0f, 1.0f };
-	vertexData[4].texcoord = { 0.5f, 0.0f };
-	vertexData[5].position = { 0.5f, -0.5f, -0.5f, 1.0f };
-	vertexData[5].texcoord = { 1.0f, 1.0f };
+	const float kLonEvery = float(M_PI) * 2.0f / float(kSubdivision);
+	const float kLatEvery = float(M_PI) / float(kSubdivision);
+
+	for (uint32_t latIndex = 0; latIndex < kSubdivision; ++latIndex) {
+		float lat = -float(M_PI) / 2.0f + kLatEvery * float(latIndex);
+		for (uint32_t lonIndex = 0; lonIndex < kSubdivision; ++lonIndex) {
+			float lon = float(lonIndex) * kLonEvery;
+			uint32_t start = (latIndex * kSubdivision + lonIndex) * 6;
+
+			float latNext = lat + kLatEvery;
+			float lonNext = lon + kLonEvery;
+
+			// 点 a, b, c, d の計算
+			Vector4 posA = { cosf(lat) * cosf(lon), sinf(lat), cosf(lat) * sinf(lon), 1.0f };
+			Vector2 uvA = { float(lonIndex) / float(kSubdivision), 1.0f - float(latIndex) / float(kSubdivision) };
+
+			// 点 b
+			Vector4 posB = { cosf(latNext) * cosf(lon), sinf(latNext), cosf(latNext) * sinf(lon), 1.0f };
+			Vector2 uvB = { float(lonIndex) / float(kSubdivision), 1.0f - float(latIndex + 1) / float(kSubdivision) };
+
+			// 点 c (前回のZ座標の修正を維持)
+			Vector4 posC = { cosf(lat) * cosf(lonNext), sinf(lat), cosf(lat) * sinf(lonNext), 1.0f };
+			Vector2 uvC = { float(lonIndex + 1) / float(kSubdivision), 1.0f - float(latIndex) / float(kSubdivision) };
+
+			// 点 d (前回のZ座標の修正を維持)
+			Vector4 posD = { cosf(latNext) * cosf(lonNext), sinf(latNext), cosf(latNext) * sinf(lonNext), 1.0f };
+			Vector2 uvD = { float(lonIndex + 1) / float(kSubdivision), 1.0f - float(latIndex + 1) / float(kSubdivision) };
+
+			// 1枚目の三角形 (a -> b -> c)
+			vertexData[start + 0] = { posA, uvA };
+			vertexData[start + 1] = { posB, uvB };
+			vertexData[start + 2] = { posC, uvC };
+
+			// 2枚目の三角形 (b -> d -> c)
+			vertexData[start + 3] = { posB, uvB };
+			vertexData[start + 4] = { posD, uvD };
+			vertexData[start + 5] = { posC, uvC };
+		}
+	}
+	vertexResource->Unmap(0, nullptr);
 
 	// 深度バッファを生成する関数を呼び出し、戻り値を受け取る
 	ID3D12Resource* depthStencilResource = CreateDepthStencilTextureResource(device, kClientWidth, kClientHeight);
 	ID3D12DescriptorHeap* dsvDescriptorHeap = CreateDescriptorHeap(device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1, false);
 
 	D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
-	dsvDesc.Format = DXGI_FORMAT_D32_FLOAT; // 深度フォーマットに合わせる
+	dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
 	dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
 
 	D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = dsvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
@@ -786,17 +826,13 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	vertexDataSprite[4].texcoord = { 1.0f, 0.0f };
 	vertexDataSprite[5].position = { 640.0f, 360.0f, 0.0f, 1.0f };
 	vertexDataSprite[5].texcoord = { 1.0f, 1.0f };
+	vertexResourceSprite->Unmap(0, nullptr);
 
 	ID3D12Resource* transformationMatrixResourceSprite = CreateBufferResource(device, sizeof(Matrix4x4));
 	Matrix4x4* transformationMatrixDataSprite = nullptr;
 	transformationMatrixResourceSprite->Map(0, nullptr, reinterpret_cast<void**>(&transformationMatrixDataSprite));
 
 	Transform transformSprite{ {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f} };
-
-	Matrix4x4 worldMatrixSprite = MakeAffineMatrix(transformSprite.scale, transformSprite.rotate, transformSprite.translate);
-	Matrix4x4 viewMatrixSprite = MakeIdentity4x4();
-	Matrix4x4 worldViewProjectionMatrixSprite = MakeOrthographicMatrix(0.0f, 0.0f, static_cast<float>(kClientWidth), static_cast<float>(kClientHeight), 0.0f, 100.0f);
-	*transformationMatrixDataSprite = worldViewProjectionMatrixSprite;
 
 	// メインループ
 	while (msg.message != WM_QUIT) {
@@ -809,7 +845,18 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			ImGui_ImplWin32_NewFrame();
 			ImGui::NewFrame();
 			ImGui::ShowDemoWindow();
+
+			// --- 【ImGuiコントロールの追加】 ---
+			ImGui::Begin("Sphere Settings");
+			ImGui::SliderFloat3("Sphere Scale", &transform.scale.x, 0.1f, 5.0f);
+			ImGui::SliderFloat3("Sphere Rotate", &transform.rotate.x, -float(M_PI), float(M_PI));
+			ImGui::SliderFloat3("Sphere Translate", &transform.translate.x, -10.0f, 10.0f);
+			ImGui::ColorEdit4("Sphere Color", &materialData->x); // リアルタイムなマテリアル色変更
+			ImGui::End();
+
+			ImGui::Begin("Sprite Settings");
 			ImGui::DragFloat3("translateSprite", &transformSprite.translate.x, 1.0f);
+			ImGui::End();
 #endif
 
 			UINT backBufferIndex = swapChain->GetCurrentBackBufferIndex();
@@ -823,26 +870,25 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 			commandList->ResourceBarrier(1, &barrier);
 
-			// 3Dオブジェクトの行列更新
-			Matrix4x4 worldMatrix = MakeAffineMatrix(transform.scale, transform.rotate, transform.translate);
-			*wvpData = worldMatrix;
-
-			// 2Dスプライトの行列更新（毎フレーム計算・転送するようにループ内に移動）
-			Matrix4x4 worldMatrixSprite = MakeAffineMatrix(transformSprite.scale, transformSprite.rotate, transformSprite.translate);
-			Matrix4x4 viewMatrixSprite = MakeIdentity4x4();
-			Matrix4x4 projectionMatrixSprite = MakeOrthographicMatrix(0.0f, 0.0f, static_cast<float>(kClientWidth), static_cast<float>(kClientHeight), 0.0f, 100.0f);
-			Matrix4x4 worldViewProjectionMatrixSprite = Multiply(worldMatrixSprite, Multiply(viewMatrixSprite, projectionMatrixSprite));
-			*transformationMatrixDataSprite = worldViewProjectionMatrixSprite;
-
-			// 回転
-			transform.rotate.y -= 0.005f;
-
 			// レンダーターゲット出力にRTVと深度バッファ(dsvHandle)を指定する
 			commandList->OMSetRenderTargets(1, &rtvHandles[backBufferIndex], FALSE, &dsvHandle);
 
 			float clearColor[] = { 0.1f, 0.25f, 0.5f, 1.0f };
 			commandList->ClearRenderTargetView(rtvHandles[backBufferIndex], clearColor, 0, nullptr);
 			commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+
+			// 3Dオブジェクト（球）の行列更新
+			Matrix4x4 worldMatrix = MakeAffineMatrix(transform.scale, transform.rotate, transform.translate);
+			*wvpData = worldMatrix;
+			// 回転
+			transform.rotate.y += 0.0025f;
+
+			// 2Dスプライトの行列更新
+			Matrix4x4 worldMatrixSprite = MakeAffineMatrix(transformSprite.scale, transformSprite.rotate, transformSprite.translate);
+			Matrix4x4 viewMatrixSprite = MakeIdentity4x4();
+			Matrix4x4 projectionMatrixSprite = MakeOrthographicMatrix(0.0f, 0.0f, static_cast<float>(kClientWidth), static_cast<float>(kClientHeight), 0.0f, 100.0f);
+			Matrix4x4 worldViewProjectionMatrixSprite = Multiply(worldMatrixSprite, Multiply(viewMatrixSprite, projectionMatrixSprite));
+			*transformationMatrixDataSprite = worldViewProjectionMatrixSprite;
 
 			ID3D12DescriptorHeap* descriptorHeaps[] = { srvDescriptorHeap };
 			commandList->SetDescriptorHeaps(1, descriptorHeaps);
@@ -852,13 +898,15 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			commandList->SetGraphicsRootSignature(rootSignature);
 			commandList->SetPipelineState(graphicsPipelineState);
 
-			// 1. 3Dオブジェクトの描画
+			// 1. 3Dオブジェクト（球）の描画
 			commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
 			commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 			commandList->SetGraphicsRootConstantBufferView(0, materialResource->GetGPUVirtualAddress());
 			commandList->SetGraphicsRootConstantBufferView(1, wvpResource->GetGPUVirtualAddress());
 			commandList->SetGraphicsRootDescriptorTable(2, textureSrvHandleGPU);
-			commandList->DrawInstanced(6, 1, 0, 0);
+
+			// 【変更点】全描画頂点数を球の総頂点数 (kNumSphereVertices) に変更
+			commandList->DrawInstanced(kNumSphereVertices, 1, 0, 0);
 
 			// 2. 2Dスプライトの描画
 			commandList->IASetVertexBuffers(0, 1, &vertexBufferViewSprite);
