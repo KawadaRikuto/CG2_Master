@@ -771,11 +771,11 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			Vector4 posB = { cosf(latNext) * cosf(lon), sinf(latNext), cosf(latNext) * sinf(lon), 1.0f };
 			Vector2 uvB = { float(lonIndex) / float(kSubdivision), 1.0f - float(latIndex + 1) / float(kSubdivision) };
 
-			// 点 c (前回のZ座標の修正を維持)
+			// 点 c
 			Vector4 posC = { cosf(lat) * cosf(lonNext), sinf(lat), cosf(lat) * sinf(lonNext), 1.0f };
 			Vector2 uvC = { float(lonIndex + 1) / float(kSubdivision), 1.0f - float(latIndex) / float(kSubdivision) };
 
-			// 点 d (前回のZ座標の修正を維持)
+			// 点 d
 			Vector4 posD = { cosf(latNext) * cosf(lonNext), sinf(latNext), cosf(latNext) * sinf(lonNext), 1.0f };
 			Vector2 uvD = { float(lonIndex + 1) / float(kSubdivision), 1.0f - float(latIndex + 1) / float(kSubdivision) };
 
