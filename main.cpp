@@ -607,7 +607,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	descriptionRootSignature.pStaticSamplers = &staticSampler;
 	descriptionRootSignature.NumStaticSamplers = 1;
 
-	// --- 【球（Sphere）描画のための定義と頂点リソースの割り当て】 ---
+	// --- 球 ---
 	const uint32_t kSubdivision = 16; // 分割数
 	const uint32_t kNumSphereVertices = kSubdivision * kSubdivision * 6; // 球の全頂点数
 	ID3D12Resource* vertexResource = CreateBufferResource(device, sizeof(VertexData) * kNumSphereVertices);
@@ -615,7 +615,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	ID3D12Resource* materialResource = CreateBufferResource(device, sizeof(Vector4));
 	Vector4* materialData = nullptr;
 	materialResource->Map(0, nullptr, reinterpret_cast<void**>(&materialData));
-	*materialData = { 1.0f, 1.0f, 1.0f, 1.0f }; // 初期カラーは白
+	*materialData = { 1.0f, 1.0f, 1.0f, 1.0f };
 
 	ID3DBlob* signatureBlob = nullptr;
 	ID3DBlob* errorBlob = nullptr;
@@ -706,7 +706,6 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	wvpResource->Map(0, nullptr, reinterpret_cast<void**>(&wvpData));
 	*wvpData = MakeIdentity4x4();
 
-	// 初期位置で画面中央からずらして球が見えなくならないように Z を引く (-5.0f など)
 	Transform transform{ {0.25f, 0.25f, 0.25f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, -5.0f} };
 
 #ifdef USE_IMGUI
@@ -747,7 +746,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU = srvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
 	textureSrvHandleGPU.ptr += device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-	// --- 【球（Sphere）頂点データの生成処理】 ---
+	// --- 球 ---
 	VertexData* vertexData = nullptr;
 	vertexResource->Map(0, nullptr, reinterpret_cast<void**>(&vertexData));
 
@@ -846,7 +845,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			ImGui::NewFrame();
 			ImGui::ShowDemoWindow();
 
-			// --- 【ImGuiコントロールの追加】 ---
+
 			ImGui::Begin("Sphere Settings");
 			ImGui::SliderFloat3("Sphere Scale", &transform.scale.x, 0.1f, 5.0f);
 			ImGui::SliderFloat3("Sphere Rotate", &transform.rotate.x, -float(M_PI), float(M_PI));
@@ -905,7 +904,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			commandList->SetGraphicsRootConstantBufferView(1, wvpResource->GetGPUVirtualAddress());
 			commandList->SetGraphicsRootDescriptorTable(2, textureSrvHandleGPU);
 
-			// 【変更点】全描画頂点数を球の総頂点数 (kNumSphereVertices) に変更
+			// 全描画頂点数を球の総頂点数
 			commandList->DrawInstanced(kNumSphereVertices, 1, 0, 0);
 
 			// 2. 2Dスプライトの描画
@@ -990,7 +989,6 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 
 	CloseWindow(hwnd);
 
-	// リーク情報の出力
 	IDXGIDebug1* dxgiDebug = nullptr;
 	if (SUCCEEDED(DXGIGetDebugInterface1(0, IID_PPV_ARGS(&dxgiDebug)))) {
 		dxgiDebug->ReportLiveObjects(DXGI_DEBUG_ALL, DXGI_DEBUG_RLO_ALL);
