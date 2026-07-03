@@ -1,26 +1,32 @@
-struct TransformationMatrix {
-    float4x4 WVP;
+struct TransformationMatrix
+{
+    float32_t4x4 WVP;
+    float32_t4x4 World;
 };
+
 ConstantBuffer<TransformationMatrix> gTransformationMatrix : register(b1);
 
-
-struct VSInput {
-    float4 position : POSITION;
-    float2 texcoord : TEXCOORD;
+struct VertexShaderInput
+{
+    float32_t4 position : POSITION0;
+    float32_t2 texcoord : TEXCOORD0;
+    float32_t3 normal : NORMAL0;
 };
 
-
-struct VSOutput {
-    float4 position : SV_POSITION;
-    float2 texcoord : TEXCOORD;
+struct VertexShaderOutput
+{
+    float32_t4 position : SV_POSITION;
+    float32_t2 texcoord : TEXCOORD0;
+    float32_t3 normal : NORMAL0;
 };
 
-VSOutput main(VSInput input) {
-    VSOutput output;
+VertexShaderOutput main(VertexShaderInput input)
+{
+    VertexShaderOutput output;
 
-    // 行列の乗算
     output.position = mul(input.position, gTransformationMatrix.WVP);
     output.texcoord = input.texcoord;
+    output.normal = normalize(mul(input.normal, (float32_t3x3) gTransformationMatrix.World));
 
     return output;
 }
