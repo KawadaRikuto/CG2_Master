@@ -7,6 +7,7 @@
 #include<format>
 #include<filesystem>
 #include<fstream>
+#include<sstream>
 #include<chrono>
 #include"externals/DirectXTex/d3dx12.h"
 #include<d3d12sdklayers.h>
@@ -67,6 +68,10 @@ struct VertexData {
 	Vector3 normal;
 };
 
+struct MaterialData {
+	std::string textureFilePath;
+};
+
 struct Material {
 	Vector4 color;
 	int32_t enableLighting;
@@ -83,6 +88,11 @@ struct DirectionalLight {
 	Vector4 color;
 	Vector3 direction;
 	float intensity;
+};
+
+struct ModelData {
+	std::vector<VertexData> vertices;
+	MaterialData material;
 };
 
 // ウィンドウプロシージャ
@@ -445,6 +455,157 @@ D3D12_GPU_DESCRIPTOR_HANDLE GetGPUDescriptorHandle(ID3D12DescriptorHeap* descrip
 	return handleGPU;
 }
 
+MaterialData LoadMaterialTemplateFile(
+	const std::string& directoryPath,
+	const std::string& filename
+) {
+	MaterialData materialData{};
+
+	// resources/〇〇.mtlというパスを作る
+	std::string filePath = directoryPath + "/" + filename;
+
+	std::ifstream file(filePath);
+
+	// ファイルが開けなければ停止
+	assert(file.is_open());
+
+	std::string line;
+
+	while (std::getline(file, line)) {
+		std::string identifier;
+		std::istringstream s(line);
+
+		// 行の先頭にある識別子を取得
+		s >> identifier;
+
+		// map_Kdはテクスチャ画像の指定
+		if (identifier == "map_Kd") {
+			std::string textureFilename;
+
+			s >> textureFilename;
+
+			// resources/テクスチャ名というパスを保存
+			materialData.textureFilePath =
+				directoryPath + "/" + textureFilename;
+		}
+	}
+
+	file.close();
+
+	return materialData;
+}
+
+ModelData LoadObjFile(
+	const std::string& directoryPath,
+	const std::string& filename
+) {
+	ModelData modelData{};
+
+	std::string filePath = directoryPath + "/" + filename;
+	std::ifstream file(filePath);
+
+	assert(file.is_open());
+
+	std::vector<Vector3> positions;
+	std::vector<Vector2> texcoords;
+	std::vector<Vector3> normals;
+
+	std::string line;
+
+	while (std::getline(file, line)) {
+		std::string identifier;
+		std::istringstream s(line);
+
+		// 行の先頭の識別子を読む
+		s >> identifier;
+
+		if (identifier == "v") {
+			Vector3 position{};
+
+			s >> position.x >> position.y >> position.z;
+
+			positions.push_back(position);
+
+		} else if (identifier == "vt") {
+			Vector2 texcoord{};
+
+			s >> texcoord.x >> texcoord.y;
+
+			// OBJは左下原点、DirectX側は左上原点なのでYを反転
+			texcoord.y = 1.0f - texcoord.y;
+
+			texcoords.push_back(texcoord);
+
+		} else if (identifier == "vn") {
+			Vector3 normal{};
+
+			s >> normal.x >> normal.y >> normal.z;
+
+			normals.push_back(normal);
+
+		} else if (identifier == "f") {
+			VertexData triangle[3]{};
+
+			for (int32_t faceVertex = 0;
+				faceVertex < 3;
+				++faceVertex) {
+
+				std::string vertexDefinition;
+				s >> vertexDefinition;
+
+				// 例：1/2/3を読み取る
+				std::istringstream v(vertexDefinition);
+
+				uint32_t positionIndex{};
+				uint32_t texcoordIndex{};
+				uint32_t normalIndex{};
+
+				v >> positionIndex;
+				v.ignore(1, '/');
+				v >> texcoordIndex;
+				v.ignore(1, '/');
+				v >> normalIndex;
+
+				Vector3 position = positions[positionIndex - 1];
+				Vector2 texcoord = texcoords[texcoordIndex - 1];
+				Vector3 normal = normals[normalIndex - 1];
+
+				// 右手座標系から左手座標系へ変換
+				position.x *= -1.0f;
+				normal.x *= -1.0f;
+
+				triangle[faceVertex] = {
+					{position.x, position.y, position.z, 1.0f},
+					texcoord,
+					normal
+				};
+			}
+
+			// 座標系を反転したので頂点の並び順も反転
+			modelData.vertices.push_back(triangle[2]);
+			modelData.vertices.push_back(triangle[1]);
+			modelData.vertices.push_back(triangle[0]);
+
+		} else if (identifier == "mtllib") {
+			// OBJからMTLファイル名を取得
+			std::string materialFilename;
+
+			s >> materialFilename;
+
+			// MTLファイルを読み込む
+			modelData.material =
+				LoadMaterialTemplateFile(
+					directoryPath,
+					materialFilename
+				);
+		}
+	}
+
+	file.close();
+
+	return modelData;
+}
+
 int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 
 	CoInitializeEx(0, COINIT_MULTITHREADED);
@@ -510,7 +671,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 		useAdapter = nullptr;
 	}
 	assert(useAdapter != nullptr);
-
+	
 	ID3D12Device* device = nullptr;
 	D3D_FEATURE_LEVEL featureLevels[] = { D3D_FEATURE_LEVEL_12_2, D3D_FEATURE_LEVEL_12_1, D3D_FEATURE_LEVEL_11_0 };
 	const char* featureLevelStrings[] = { "12.2", "12.1", "11.0" };
@@ -643,10 +804,11 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	descriptionRootSignature.pStaticSamplers = &staticSampler;
 	descriptionRootSignature.NumStaticSamplers = 1;
 
-	// --- 球 ---
-	const uint32_t kSubdivision = 16; // 分割数
-	const uint32_t kNumSphereVertices = kSubdivision * kSubdivision * 6; // 球の全頂点数
-	ID3D12Resource* vertexResource = CreateBufferResource(device, sizeof(VertexData) * kNumSphereVertices);
+	// --- モデル読み込み ---
+	ModelData modelData = LoadObjFile("resources", "plane.obj");
+	assert(!modelData.vertices.empty());
+
+	ID3D12Resource* vertexResource = CreateBufferResource(device, sizeof(VertexData) * modelData.vertices.size());
 
 	ID3D12Resource* materialResource = CreateBufferResource(device, sizeof(Material));
 	Material* materialData = nullptr;
@@ -726,7 +888,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 
 	D3D12_VERTEX_BUFFER_VIEW vertexBufferView{};
 	vertexBufferView.BufferLocation = vertexResource->GetGPUVirtualAddress();
-	vertexBufferView.SizeInBytes = sizeof(VertexData) * kNumSphereVertices;
+	vertexBufferView.SizeInBytes = UINT(sizeof(VertexData) * modelData.vertices.size());
 	vertexBufferView.StrideInBytes = sizeof(VertexData);
 
 	D3D12_VIEWPORT viewport{};
@@ -749,8 +911,8 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	wvpData->WVP = MakeIdentity4x4();
 	wvpData->World = MakeIdentity4x4();
 
-	Transform transform{ {0.25f, 0.25f, 0.25f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, -5.0f} };
-
+	Transform transform{{0.25f, 0.25f, 0.25f}, {0.0f, static_cast<float>(M_PI), 0.0f}, {0.0f, 0.0f, -5.0f}};
+	
 #ifdef USE_IMGUI
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
@@ -760,28 +922,76 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	ImGuiIO& io = ImGui::GetIO();
 	io.Fonts->Build();
 #endif
-
+	
 	// テクスチャ読み込み
+	// OBJのMTLファイルで指定されたテクスチャを読み込む
 	DirectX::ScratchImage mipImages;
 	ID3D12Resource* textureResource = nullptr;
 	ID3D12Resource* intermediateResource = nullptr;
+
 	if (msg.message != WM_QUIT) {
-		if (LoadTexture("resources/uvChecker.png", mipImages)) {
-			const DirectX::TexMetadata& metadata = mipImages.GetMetadata();
-			textureResource = CreateTextureResource(device, metadata);
-			intermediateResource = UploadTextureData(textureResource, mipImages, device, commandList);
+
+		// MTLからテクスチャパスを取得できたか確認
+		if (modelData.material.textureFilePath.empty()) {
+			MessageBoxA(
+				hwnd,
+				"MTLファイルからテクスチャのパスを取得できませんでした。",
+				"Error",
+				MB_OK
+			);
+
+			msg.message = WM_QUIT;
+
+		} else if (LoadTexture(
+			modelData.material.textureFilePath,
+			mipImages
+		)) {
+			const DirectX::TexMetadata& metadata =
+				mipImages.GetMetadata();
+
+			textureResource =
+				CreateTextureResource(device, metadata);
+
+			intermediateResource =
+				UploadTextureData(
+					textureResource,
+					mipImages,
+					device,
+					commandList
+				);
 
 			D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
 			srvDesc.Format = metadata.format;
-			srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-			srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-			srvDesc.Texture2D.MipLevels = UINT(metadata.mipLevels);
+			srvDesc.Shader4ComponentMapping =
+				D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+			srvDesc.ViewDimension =
+				D3D12_SRV_DIMENSION_TEXTURE2D;
+			srvDesc.Texture2D.MipLevels =
+				static_cast<UINT>(metadata.mipLevels);
 
-			D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU = srvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
-			textureSrvHandleCPU.ptr += device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-			device->CreateShaderResourceView(textureResource, &srvDesc, textureSrvHandleCPU);
+			D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU =
+				GetCPUDescriptorHandle(
+					srvDescriptorHeap,
+					device->GetDescriptorHandleIncrementSize(
+						D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV
+					),
+					1
+				);
+
+			device->CreateShaderResourceView(
+				textureResource,
+				&srvDesc,
+				textureSrvHandleCPU
+			);
+
 		} else {
-			MessageBoxA(hwnd, "テクスチャ 'resources/uvChecker.png' が見つからないか、読み込めません。プロジェクト構造を確認してください。", "Warning", MB_OK);
+			MessageBoxA(
+				hwnd,
+				modelData.material.textureFilePath.c_str(),
+				"テクスチャの読み込みに失敗しました",
+				MB_OK
+			);
+
 			msg.message = WM_QUIT;
 		}
 	}
@@ -789,49 +999,10 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU = srvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
 	textureSrvHandleGPU.ptr += device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-	// --- 球 ---
+	// --- モデルの頂点データを頂点バッファへコピー ---
 	VertexData* vertexData = nullptr;
 	vertexResource->Map(0, nullptr, reinterpret_cast<void**>(&vertexData));
-
-	const float kLonEvery = float(M_PI) * 2.0f / float(kSubdivision);
-	const float kLatEvery = float(M_PI) / float(kSubdivision);
-
-	for (uint32_t latIndex = 0; latIndex < kSubdivision; ++latIndex) {
-		float lat = -float(M_PI) / 2.0f + kLatEvery * float(latIndex);
-		for (uint32_t lonIndex = 0; lonIndex < kSubdivision; ++lonIndex) {
-			float lon = float(lonIndex) * kLonEvery;
-			uint32_t start = (latIndex * kSubdivision + lonIndex) * 6;
-
-			float latNext = lat + kLatEvery;
-			float lonNext = lon + kLonEvery;
-
-			// 点 a, b, c, d の計算
-			Vector4 posA = { cosf(lat) * cosf(lon), sinf(lat), cosf(lat) * sinf(lon), 1.0f };
-			Vector2 uvA = { float(lonIndex) / float(kSubdivision), 1.0f - float(latIndex) / float(kSubdivision) };
-
-			// 点 b
-			Vector4 posB = { cosf(latNext) * cosf(lon), sinf(latNext), cosf(latNext) * sinf(lon), 1.0f };
-			Vector2 uvB = { float(lonIndex) / float(kSubdivision), 1.0f - float(latIndex + 1) / float(kSubdivision) };
-
-			// 点 c
-			Vector4 posC = { cosf(lat) * cosf(lonNext), sinf(lat), cosf(lat) * sinf(lonNext), 1.0f };
-			Vector2 uvC = { float(lonIndex + 1) / float(kSubdivision), 1.0f - float(latIndex) / float(kSubdivision) };
-
-			// 点 d
-			Vector4 posD = { cosf(latNext) * cosf(lonNext), sinf(latNext), cosf(latNext) * sinf(lonNext), 1.0f };
-			Vector2 uvD = { float(lonIndex + 1) / float(kSubdivision), 1.0f - float(latIndex + 1) / float(kSubdivision) };
-
-			// 1枚目の三角形 (a -> b -> c)
-			vertexData[start + 0] = { posA, uvA, { posA.x, posA.y, posA.z } };
-			vertexData[start + 1] = { posB, uvB, { posB.x, posB.y, posB.z } };
-			vertexData[start + 2] = { posC, uvC, { posC.x, posC.y, posC.z } };
-
-			// 2枚目の三角形 (b -> d -> c)
-			vertexData[start + 3] = { posB, uvB, { posB.x, posB.y, posB.z } };
-			vertexData[start + 4] = { posD, uvD, { posD.x, posD.y, posD.z } };
-			vertexData[start + 5] = { posC, uvC, { posC.x, posC.y, posC.z } };
-		}
-	}
+	std::memcpy(vertexData, modelData.vertices.data(), sizeof(VertexData) * modelData.vertices.size());
 	vertexResource->Unmap(0, nullptr);
 
 	// 深度バッファを生成する関数を呼び出し、戻り値を受け取る
@@ -890,30 +1061,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	const uint32_t descriptorSizeDSV = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
 
 	GetCPUDescriptorHandle(rtvDescriptorHeap, descriptorSizeRTV, 0);
-
-	DirectX::ScratchImage mipImages2;
-
-	if (!LoadTexture("resources/monsterBall.png", mipImages2)) {
-		MessageBoxA(hwnd, "テクスチャ 'resources/monsterBall.png' の読み込みに失敗しました。", "Error", MB_OK);
-		msg.message = WM_QUIT;
-	}
-	const DirectX::TexMetadata& metadata2 = mipImages2.GetMetadata();
-	ID3D12Resource* textureResource2 = CreateTextureResource(device, metadata2);
-	ID3D12Resource* intermediateResource2 = UploadTextureData(textureResource2, mipImages2, device, commandList);
-
-	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc2{};
-	srvDesc2.Format = metadata2.format;
-	srvDesc2.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-	srvDesc2.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-	srvDesc2.Texture2D.MipLevels = UINT(metadata2.mipLevels);
-
-	D3D12_CPU_DESCRIPTOR_HANDLE textureSrvHandleCPU2 = GetCPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 2);
-	D3D12_GPU_DESCRIPTOR_HANDLE textureSrvHandleGPU2 = GetGPUDescriptorHandle(srvDescriptorHeap, descriptorSizeSRV, 2);
-	device->CreateShaderResourceView(textureResource2, &srvDesc2, textureSrvHandleCPU2);
-
-	bool useMonsterBall = true;
-
-
+	
 	ID3D12Resource* materialResourceSprite = CreateBufferResource(device, sizeof(Material));
 	Material* materialDataSprite = nullptr;
 	materialResourceSprite->Map(0, nullptr, reinterpret_cast<void**>(&materialDataSprite));
@@ -959,12 +1107,11 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			ImGui::ShowDemoWindow();
 
 
-			ImGui::Begin("Sphere Settings");
-			ImGui::SliderFloat3("Sphere Scale", &transform.scale.x, 0.1f, 5.0f);
-			ImGui::SliderFloat3("Sphere Rotate", &transform.rotate.x, -float(M_PI), float(M_PI));
-			ImGui::SliderFloat3("Sphere Translate", &transform.translate.x, -10.0f, 10.0f);
-			ImGui::ColorEdit4("Sphere Color", &materialData->color.x); // リアルタイムなマテリアル色変更
-			ImGui::Checkbox("useMonsterBall", &useMonsterBall);
+			ImGui::Begin("Model Settings");
+			ImGui::SliderFloat3("Model Scale", &transform.scale.x, 0.1f, 5.0f);
+			ImGui::SliderFloat3("Model Rotate", &transform.rotate.x, -float(M_PI), float(M_PI));
+			ImGui::SliderFloat3("Model Translate", &transform.translate.x, -10.0f, 10.0f);
+			ImGui::ColorEdit4("Model Color", &materialData->color.x); // リアルタイムなマテリアル色変更
 			ImGui::End();
 
 			ImGui::Begin("Sprite Settings");
@@ -998,7 +1145,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			wvpData->WVP = worldMatrix;
 			wvpData->World = worldMatrix;
 			// 回転
-			transform.rotate.y += 0.0025f;
+			//transform.rotate.y += 0.0025f;
 
 			// 2Dスプライトの行列更新
 			Matrix4x4 worldMatrixSprite = MakeAffineMatrix(transformSprite.scale, transformSprite.rotate, transformSprite.translate);
@@ -1024,24 +1171,24 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			commandList->SetGraphicsRootSignature(rootSignature);
 			commandList->SetPipelineState(graphicsPipelineState);
 
-			// 1. 3Dオブジェクト（球）の描画
+			// 1. 3Dモデルの描画
 			commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
 			commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-			commandList->SetGraphicsRootConstantBufferView(0, materialResource->GetGPUVirtualAddress());
-			commandList->SetGraphicsRootConstantBufferView(1, wvpResource->GetGPUVirtualAddress());
-			commandList->SetGraphicsRootDescriptorTable(2, useMonsterBall ? textureSrvHandleGPU2 : textureSrvHandleGPU);
-			commandList->SetGraphicsRootConstantBufferView(3, directionalLightResource->GetGPUVirtualAddress());
-
-			// 全描画頂点数を球の総頂点数
-			commandList->DrawInstanced(kNumSphereVertices, 1, 0, 0);
+			commandList->SetGraphicsRootConstantBufferView(0,materialResource->GetGPUVirtualAddress());
+			commandList->SetGraphicsRootConstantBufferView(1,wvpResource->GetGPUVirtualAddress());
+			// MTLのmap_Kdで指定されたテクスチャを設定
+			commandList->SetGraphicsRootDescriptorTable( 2,textureSrvHandleGPU);
+			commandList->SetGraphicsRootConstantBufferView( 3,directionalLightResource->GetGPUVirtualAddress());
+			// 描画する頂点数はModelDataの頂点数
+			commandList->DrawInstanced(UINT(modelData.vertices.size()), 1, 0, 0);
 
 			// 2. 2Dスプライトの描画
-			commandList->IASetVertexBuffers(0, 1, &vertexBufferViewSprite);
+			/*commandList->IASetVertexBuffers(0, 1, &vertexBufferViewSprite);
 			commandList->IASetIndexBuffer(&indexBufferViewSprite);
 			commandList->SetGraphicsRootConstantBufferView(0, materialResourceSprite->GetGPUVirtualAddress());
 			commandList->SetGraphicsRootConstantBufferView(1, transformationMatrixResourceSprite->GetGPUVirtualAddress());
 			commandList->SetGraphicsRootDescriptorTable(2, textureSrvHandleGPU);
-			commandList->DrawIndexedInstanced(6, 1, 0, 0, 0);
+			commandList->DrawIndexedInstanced(6, 1, 0, 0, 0);*/
 
 #ifdef USE_IMGUI
 			ImGui::Render();
@@ -1087,9 +1234,6 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	if (swapChainResources[0]) swapChainResources[0]->Release();
 	if (swapChainResources[1]) swapChainResources[1]->Release();
 	if (swapChain) swapChain->Release();
-
-	if (intermediateResource2) intermediateResource2->Release();
-	if (textureResource2) textureResource2->Release();
 
 	if (intermediateResource) intermediateResource->Release();
 	if (textureResource) textureResource->Release();
