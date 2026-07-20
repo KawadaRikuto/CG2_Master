@@ -26,6 +26,9 @@
 #include <DirectXTex.h>
 #define _USE_MATH_DEFINES
 #include <math.h>
+#include <xaudio2.h>
+#pragma comment(lib, "xaudio2.lib")
+#include <fstream>
 #ifdef USE_IMGUI
 #include "externals/imgui/imgui.h"
 #include "externals/imgui/imgui_impl_dx12.h"
@@ -33,6 +36,7 @@
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 #endif
 #include <vector>
+#include <cstring>
 #pragma warning(pop)
 
 using Microsoft::WRL::ComPtr;
@@ -96,6 +100,30 @@ struct DirectionalLight {
 struct ModelData {
 	std::vector<VertexData> vertices;
 	MaterialData material;
+};
+
+struct ChunkHeader {
+	char id[4];
+	uint32_t size;
+};
+
+struct RiffHeader {
+	ChunkHeader chunk;
+	char type[4];
+};
+
+struct FormatChunk {
+	ChunkHeader chunk;
+	WAVEFORMATEX fmt;
+};
+
+struct SoundData {
+	// 波形フォーマット
+	WAVEFORMATEX wfex;
+	// バッファの先頭アドレス
+	BYTE* pBuffer;
+	// バッファのサイズ
+	unsigned int bufferSize;
 };
 
 // ウィンドウプロシージャ
@@ -371,6 +399,7 @@ static LONG WINAPI MyUnhandledExceptionFilter(struct _EXCEPTION_POINTERS* except
 	minidumpInformation.ClientPointers = TRUE;
 
 	MiniDumpWriteDump(GetCurrentProcess(), processId, dumpFileHandle, MiniDumpNormal, &minidumpInformation, nullptr, nullptr);
+	CloseHandle(dumpFileHandle);
 
 	return EXCEPTION_EXECUTE_HANDLER;
 }
@@ -618,6 +647,94 @@ struct D3DResourceLeakChecker {
 		}
 	}
 };
+
+SoundData SoundLoadWave(const char* filename) {
+
+	std::ifstream file;
+	file.open(filename, std::ios::binary);
+	assert(file.is_open());
+
+	RiffHeader riff;
+	file.read((char*)&riff, sizeof(riff));
+
+	if (strncmp(riff.chunk.id, "RIFF", 4) != 0) {
+		assert(0);
+	}
+
+	if (strncmp(riff.type, "WAVE", 4) != 0) {
+		assert(0);
+	}
+
+	FormatChunk format = {};
+	file.read((char*)&format, sizeof(ChunkHeader));
+
+	if (strncmp(format.chunk.id, "fmt ", 4) != 0) {
+		assert(0);
+	}
+
+	assert(format.chunk.size <= sizeof(format.fmt));
+	file.read((char*)&format.fmt, format.chunk.size);
+
+	ChunkHeader data;
+	file.read((char*)&data, sizeof(data));
+
+	if (strncmp(data.id, "JUNK", 4) == 0) {
+		file.seekg(data.size, std::ios::cur);
+		file.read((char*)&data, sizeof(data));
+	}
+
+	if (strncmp(data.id, "data", 4) != 0) {
+		assert(0);
+	}
+
+	char* pBuffer = new char[data.size];
+	file.read(pBuffer, data.size);
+
+	file.close();
+
+	SoundData soundData = {};
+
+	soundData.wfex = format.fmt;
+	soundData.pBuffer = reinterpret_cast<BYTE*>(pBuffer);
+	soundData.bufferSize = data.size;
+
+	return soundData;
+}
+
+void SoundUnload(SoundData* soundData)
+{
+	delete[] soundData->pBuffer;
+
+	soundData->pBuffer = nullptr;
+	soundData->bufferSize = 0;
+	soundData->wfex = {};
+}
+
+IXAudio2SourceVoice* SoundPlayWave(
+	IXAudio2* xAudio2,
+	const SoundData& soundData) {
+
+	assert(xAudio2 != nullptr);
+
+	IXAudio2SourceVoice* sourceVoice = nullptr;
+	HRESULT hr = xAudio2->CreateSourceVoice(
+		&sourceVoice,
+		&soundData.wfex);
+	assert(SUCCEEDED(hr));
+
+	XAUDIO2_BUFFER buffer{};
+	buffer.pAudioData = soundData.pBuffer;
+	buffer.AudioBytes = soundData.bufferSize;
+	buffer.Flags = XAUDIO2_END_OF_STREAM;
+
+	hr = sourceVoice->SubmitSourceBuffer(&buffer);
+	assert(SUCCEEDED(hr));
+
+	hr = sourceVoice->Start();
+	assert(SUCCEEDED(hr));
+
+	return sourceVoice;
+}
 
 int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 
@@ -1111,6 +1228,18 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	indexDataSprite[5] = 2;
 
 
+	ComPtr<IXAudio2> xaudio2;
+	IXAudio2MasteringVoice* masteringVoice = nullptr;
+
+	hr = XAudio2Create(&xaudio2, 0, XAUDIO2_DEFAULT_PROCESSOR);
+
+	hr = xaudio2->CreateMasteringVoice(&masteringVoice);
+
+	// 音声の読み込み
+	SoundData soundData1 = SoundLoadWave("Resources/Alarm01.wav");
+
+	IXAudio2SourceVoice* sourceVoice = SoundPlayWave(xaudio2.Get(), soundData1);
+
 	// メインループ
 	while (msg.message != WM_QUIT) {
 		if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -1231,8 +1360,23 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 
 			commandAllocator->Reset();
 			commandList->Reset(commandAllocator.Get(), nullptr);
+
 		}
 	}
+
+	if (sourceVoice != nullptr) {
+		sourceVoice->Stop();
+		sourceVoice->DestroyVoice();
+		sourceVoice = nullptr;
+	}
+
+	if (masteringVoice != nullptr) {
+		masteringVoice->DestroyVoice();
+		masteringVoice = nullptr;
+	}
+
+	xaudio2.Reset();
+	SoundUnload(&soundData1);
 
 #ifdef USE_IMGUI
 	ImGui_ImplDX12_Shutdown();
