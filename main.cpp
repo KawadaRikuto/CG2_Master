@@ -33,6 +33,7 @@
 #include <dinput.h>
 #pragma comment(lib, "dinput8.lib")
 #pragma comment(lib, "dxguid.lib")
+#include "DebugCamera.h"
 #ifdef USE_IMGUI
 #include "externals/imgui/imgui.h"
 #include "externals/imgui/imgui_impl_dx12.h"
@@ -1259,6 +1260,10 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	hr = keyboard->SetCooperativeLevel(hwnd, DISCL_FOREGROUND | DISCL_NONEXCLUSIVE);
 	assert(SUCCEEDED(hr));
 
+	DebugCamera debugCamera;
+	debugCamera.Initialize(kClientWidth, kClientHeight, hwnd);
+
+
 	// メインループ
 	while (msg.message != WM_QUIT) {
 		if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -1269,6 +1274,16 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			// DirectInputでキーボードの状態を取得
 			BYTE key[256] = {};
 			hr = keyboard->GetDeviceState(sizeof(key), key);
+			if (FAILED(hr)) {
+				keyboard->Acquire();
+				hr = keyboard->GetDeviceState(sizeof(key), key);
+			}
+			if (SUCCEEDED(hr)) {
+				debugCamera.Update(key);
+			}
+
+			keyboard->Acquire();
+
 #ifdef USE_IMGUI
 			ImGui_ImplDX12_NewFrame();
 			ImGui_ImplWin32_NewFrame();
