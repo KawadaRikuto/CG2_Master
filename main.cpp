@@ -31,9 +31,9 @@
 #include <fstream>
 #define DIRECTINPUT_VERSION 0x0800
 #include <dinput.h>
+#include "DebugCamera.h"
 #pragma comment(lib, "dinput8.lib")
 #pragma comment(lib, "dxguid.lib")
-#include "DebugCamera.h"
 #ifdef USE_IMGUI
 #include "externals/imgui/imgui.h"
 #include "externals/imgui/imgui_impl_dx12.h"
@@ -175,6 +175,12 @@ Matrix4x4 Multiply(const Matrix4x4& m1, const Matrix4x4& m2) {
 				m1.m[i][3] * m2.m[3][j];
 		}
 	}
+	return result;
+}
+
+Matrix4x4 ConvertMatrix(const DirectX::XMFLOAT4X4& matrix) {
+	Matrix4x4 result{};
+	std::memcpy(result.m, &matrix, sizeof(result.m));
 	return result;
 }
 
@@ -1263,7 +1269,6 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	DebugCamera debugCamera;
 	debugCamera.Initialize(kClientWidth, kClientHeight, hwnd);
 
-
 	// メインループ
 	while (msg.message != WM_QUIT) {
 		if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -1281,9 +1286,6 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			if (SUCCEEDED(hr)) {
 				debugCamera.Update(key);
 			}
-
-			keyboard->Acquire();
-
 #ifdef USE_IMGUI
 			ImGui_ImplDX12_NewFrame();
 			ImGui_ImplWin32_NewFrame();
@@ -1296,6 +1298,15 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			ImGui::SliderFloat3("Model Rotate", &transform.rotate.x, -float(M_PI), float(M_PI));
 			ImGui::SliderFloat3("Model Translate", &transform.translate.x, -10.0f, 10.0f);
 			ImGui::ColorEdit4("Model Color", &materialData->color.x); // リアルタイムなマテリアル色変更
+			ImGui::End();
+
+			ImGui::Begin("Debug Camera");
+			const DirectX::XMFLOAT3& cameraPosition = debugCamera.GetTranslation();
+			const DirectX::XMFLOAT3& cameraRotation = debugCamera.GetRotation();
+			ImGui::Text("Position: %.2f, %.2f, %.2f", cameraPosition.x, cameraPosition.y, cameraPosition.z);
+			ImGui::Text("Rotation: %.2f, %.2f, %.2f", cameraRotation.x, cameraRotation.y, cameraRotation.z);
+			ImGui::Text("Move: W/S A/D R/F");
+			ImGui::Text("Rotate: Arrow Q/E or Right Mouse Drag");
 			ImGui::End();
 
 			ImGui::Begin("Sprite Settings");
@@ -1324,9 +1335,14 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			commandList->ClearRenderTargetView(rtvHandles[backBufferIndex], clearColor, 0, nullptr);
 			commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-			// 3Dオブジェクト（球）の行列更新
-			Matrix4x4 worldMatrix = MakeAffineMatrix(transform.scale, transform.rotate, transform.translate);
-			wvpData->WVP = worldMatrix;
+			// 3Dオブジェクトの行列更新
+			Matrix4x4 worldMatrix = MakeAffineMatrix(
+				transform.scale, transform.rotate, transform.translate);
+			Matrix4x4 viewMatrix = ConvertMatrix(debugCamera.GetViewMatrix());
+			Matrix4x4 projectionMatrix = ConvertMatrix(debugCamera.GetProjectionMatrix());
+			Matrix4x4 worldViewProjectionMatrix = Multiply(
+				worldMatrix, Multiply(viewMatrix, projectionMatrix));
+			wvpData->WVP = worldViewProjectionMatrix;
 			wvpData->World = worldMatrix;
 			// 回転
 			//transform.rotate.y += 0.0025f;
@@ -1407,6 +1423,17 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 		}
 	}
 
+
+	if (keyboard != nullptr) {
+		keyboard->Unacquire();
+		keyboard->Release();
+		keyboard = nullptr;
+	}
+
+	if (directInput != nullptr) {
+		directInput->Release();
+		directInput = nullptr;
+	}
 
 	if (sourceVoice != nullptr) {
 		sourceVoice->Stop();
