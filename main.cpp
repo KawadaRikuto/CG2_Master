@@ -34,6 +34,7 @@
 #include "DebugCamera.h"
 #pragma comment(lib, "dinput8.lib")
 #pragma comment(lib, "dxguid.lib")
+#include "Input.h"
 #ifdef USE_IMGUI
 #include "externals/imgui/imgui.h"
 #include "externals/imgui/imgui_impl_dx12.h"
@@ -42,6 +43,9 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 #endif
 #include <vector>
 #include <cstring>
+#include <iomanip>
+#include <sstream>
+#include <ctime>
 #pragma warning(pop)
 
 using Microsoft::WRL::ComPtr;
@@ -747,7 +751,7 @@ IXAudio2SourceVoice* SoundPlayWave(
 	return sourceVoice;
 }
 
-int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
+int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 
 	D3DResourceLeakChecker leakChecker;
 
@@ -793,7 +797,15 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
 	std::chrono::time_point<std::chrono::system_clock, std::chrono::seconds> nowSeconds = std::chrono::time_point_cast<std::chrono::seconds>(now);
 	std::chrono::zoned_time localTime{ std::chrono::current_zone(), nowSeconds };
-	std::string detaString = std::format("{:%Y%m%d_%H%M%S}", localTime);
+	std::time_t currentTime = std::chrono::system_clock::to_time_t(now);
+	std::tm localTm{};
+
+	localtime_s(&localTm, &currentTime);
+
+	std::ostringstream oss;
+	oss << std::put_time(&localTm, "%Y%m%d_%H%M%S");
+
+	std::string detaString = oss.str();
 	std::string logFilePath = std::string("logs/") + detaString + ".log";
 	std::ofstream logStream(logFilePath);
 
@@ -1251,20 +1263,14 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 
 	IXAudio2SourceVoice* sourceVoice = SoundPlayWave(xaudio2.Get(), soundData1);
 
-	//DirectInputの初期化
-	IDirectInput8* directInput = nullptr;
-	hr = DirectInput8Create(wc.hInstance, DIRECTINPUT_VERSION, IID_IDirectInput8, (void**)&directInput, nullptr);
-	assert(SUCCEEDED(hr));
+	// ポインタ
+	Input* input = nullptr;
 
-	IDirectInputDevice8* keyboard = nullptr;
-	hr = directInput->CreateDevice(GUID_SysKeyboard, &keyboard, nullptr);
-	assert(SUCCEEDED(hr));
+	// 入力の初期化
+	input = new Input();
+	input->Initialize(hInstance, hwnd);
 
-	hr = keyboard->SetDataFormat(&c_dfDIKeyboard);
-	assert(SUCCEEDED(hr));
-
-	hr = keyboard->SetCooperativeLevel(hwnd, DISCL_FOREGROUND | DISCL_NONEXCLUSIVE);
-	assert(SUCCEEDED(hr));
+	
 
 	DebugCamera debugCamera;
 	debugCamera.Initialize(kClientWidth, kClientHeight, hwnd);
@@ -1276,16 +1282,8 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			DispatchMessage(&msg);
 		} else {
 
-			// DirectInputでキーボードの状態を取得
-			BYTE key[256] = {};
-			hr = keyboard->GetDeviceState(sizeof(key), key);
-			if (FAILED(hr)) {
-				keyboard->Acquire();
-				hr = keyboard->GetDeviceState(sizeof(key), key);
-			}
-			if (SUCCEEDED(hr)) {
-				debugCamera.Update(key);
-			}
+			input->Update();
+			
 #ifdef USE_IMGUI
 			ImGui_ImplDX12_NewFrame();
 			ImGui_ImplWin32_NewFrame();
@@ -1390,10 +1388,10 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			commandList->SetGraphicsRootDescriptorTable(2, textureSrvHandleGPU);
 			commandList->DrawIndexedInstanced(6, 1, 0, 0, 0);*/
 
-			// 数字のキーが押されたら
-			if (key[DIK_0]) {
-				OutputDebugStringA("Hit 0\n");
-			}
+			//// 数字のキーが押されたら
+			//if (key[DIK_0]) {
+			//	OutputDebugStringA("Hit 0\n");
+			//}
 
 #ifdef USE_IMGUI
 			ImGui::Render();
@@ -1424,16 +1422,16 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	}
 
 
-	if (keyboard != nullptr) {
+	/*if (keyboard != nullptr) {
 		keyboard->Unacquire();
 		keyboard->Release();
 		keyboard = nullptr;
-	}
+	}*/
 
-	if (directInput != nullptr) {
+	/*if (directInput != nullptr) {
 		directInput->Release();
 		directInput = nullptr;
-	}
+	}*/
 
 	if (sourceVoice != nullptr) {
 		sourceVoice->Stop();
@@ -1462,6 +1460,9 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 
 	CloseWindow(hwnd);
 	CoUninitialize();
+
+	// 解放
+	delete input;
 
 	return 0;
 }
