@@ -1388,10 +1388,10 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 			commandList->SetGraphicsRootDescriptorTable(2, textureSrvHandleGPU);
 			commandList->DrawIndexedInstanced(6, 1, 0, 0, 0);*/
 
-			//// 数字のキーが押されたら
-			//if (key[DIK_0]) {
-			//	OutputDebugStringA("Hit 0\n");
-			//}
+			// 数字のキーが押されたら
+			if (input->TriggerKey(DIK_0)) {
+				OutputDebugStringA("Hit 0\n");
+			}
 
 #ifdef USE_IMGUI
 			ImGui::Render();

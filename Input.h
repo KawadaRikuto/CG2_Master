@@ -19,7 +19,16 @@ public:
 		// 更新
 		void Update();
 
+		bool PushKey(BYTE keyNumber);
+
+		bool TriggerKey(BYTE keyNumber);
+
 private:
+
+	BYTE key[256] = {};
+	BYTE prevKey[256] = {};
+
+	ComPtr<IDirectInput8> directInput;
 
 	ComPtr<IDirectInputDevice8> keyboard;
 
