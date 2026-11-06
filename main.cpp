@@ -28,7 +28,6 @@
 #include <math.h>
 #include <xaudio2.h>
 #pragma comment(lib, "xaudio2.lib")
-#include <fstream>
 #define DIRECTINPUT_VERSION 0x0800
 #include <dinput.h>
 #include "DebugCamera.h"
@@ -40,7 +39,6 @@
 #include "externals/imgui/imgui.h"
 #include "externals/imgui/imgui_impl_dx12.h"
 #include "externals/imgui/imgui_impl_win32.h"
-extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 #endif
 #include <vector>
 #include <cstring>
@@ -135,30 +133,6 @@ struct SoundData {
 	// バッファのサイズ
 	unsigned int bufferSize;
 };
-
-// 旧ウィンドウプロシージャ（Window::WindowProcへ統合するため未使用）
-LRESULT CALLBACK WndProc(HWND hwnd, UINT msg,
-	WPARAM wparam, LPARAM lparam) {
-
-#ifdef USE_IMGUI
-	// ImGuiのウィンドウプロシージャハンドラを呼び出す
-	if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam)) {
-		return true;
-	}
-#endif
-
-	// メッセージに応じてゲーム固有の処理を行う
-	switch (msg) {
-		// ウィンドウが破棄された
-	case WM_DESTROY:
-		// OSに対して、アプリケーションの終了を伝える
-		PostQuitMessage(0);
-		return 0;
-	}
-
-	// 標準のメッセージ処理を行う
-	return DefWindowProc(hwnd, msg, wparam, lparam);
-}
 
 // 単位行列の作成
 Matrix4x4 MakeIdentity4x4() {
@@ -763,7 +737,6 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 	Window window;
 	window.Initialize();
 	HWND hwnd = window.GetHwnd();
-	HINSTANCE windowInstance = window.GetHInstance();
 
 	// DirectX側で使用するクライアント領域のサイズ
 	const int32_t kClientWidth = Window::kWindowWidth;
@@ -1260,7 +1233,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPSTR, _In
 
 	// 入力の初期化
 	input = new Input();
-	input->Initialize(windowInstance, hwnd);
+	input->Initialize(&window);
 
 
 
