@@ -6,12 +6,11 @@
 
 class Window;
 
-// 入力
 class Input {
 public:
     template <class T> using ComPtr = Microsoft::WRL::ComPtr<T>;
 
-    // Windowクラスのポインタを受け取って初期化
+    // 初期化
     void Initialize(Window* window);
     void Update();
     bool PushKey(BYTE keyNumber);
