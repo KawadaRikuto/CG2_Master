@@ -616,7 +616,7 @@ ModelData LoadObjFile(
 				normal.x *= -1.0f;
 
 				triangle[faceVertex] = {
-					{position.x, position.y, position.z, 1.0f},
+					{ position.x, position.y, position.z, 1.0f },
 					texcoord,
 					normal
 				};
@@ -991,8 +991,16 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	inputLayoutDesc.pInputElementDescs = inputElementDescs;
 	inputLayoutDesc.NumElements = _countof(inputElementDescs);
 
+	// NormalBlend (alpha blend): Src * SrcAlpha + Dest * (1 - SrcAlpha)
 	D3D12_BLEND_DESC blendDesc{};
 	blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+	blendDesc.RenderTarget[0].BlendEnable = TRUE;
+	blendDesc.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
+	blendDesc.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+	blendDesc.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+	blendDesc.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+	blendDesc.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+	blendDesc.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ZERO;
 
 	D3D12_RASTERIZER_DESC rasterizerDesc{};
 	rasterizerDesc.CullMode = D3D12_CULL_MODE_BACK;
@@ -1056,7 +1064,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	wvpData->WVP = MakeIdentity4x4();
 	wvpData->World = MakeIdentity4x4();
 
-	Transform transform{ {0.25f, 0.25f, 0.25f}, {0.0f, static_cast<float>(M_PI), 0.0f}, {0.0f, 0.0f, -5.0f} };
+	Transform transform{ { 0.25f, 0.25f, 0.25f },{ 0.0f, static_cast<float>(M_PI), 0.0f },{ 0.0f, 0.0f, -5.0f } };
 
 #ifdef USE_IMGUI
 	IMGUI_CHECKVERSION();
@@ -1192,7 +1200,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	transformationMatrixDataSprite->WVP = MakeIdentity4x4();
 	transformationMatrixDataSprite->World = MakeIdentity4x4();
 
-	Transform transformSprite{ {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f} };
+	Transform transformSprite{ { 1.0f, 1.0f, 1.0f },{ 0.0f, 0.0f, 0.0f },{ 0.0f, 0.0f, 0.0f } };
 
 	// UVTransform用
 	Transform uvTransformSprite{
@@ -1297,7 +1305,17 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			ImGui::SliderFloat3("Model Scale", &transform.scale.x, 0.1f, 5.0f);
 			ImGui::SliderFloat3("Model Rotate", &transform.rotate.x, -float(M_PI), float(M_PI));
 			ImGui::SliderFloat3("Model Translate", &transform.translate.x, -10.0f, 10.0f);
-			ImGui::ColorEdit4("Model Color", &materialData->color.x); // リアルタイムなマテリアル色変更
+			ImGui::ColorEdit4("Model Color", &materialData->color.x); // alpha = transparency
+			bool lightingEnabled = (materialData->enableLighting != 0);
+			if (ImGui::Checkbox("Enable Lighting", &lightingEnabled)) {
+				materialData->enableLighting = lightingEnabled ? 1 : 0;
+			}
+			ImGui::End();
+
+			ImGui::Begin("Lighting Settings");
+			ImGui::ColorEdit3("Light Color", &directionalLightData->color.x);
+			ImGui::SliderFloat3("Light Direction", &directionalLightData->direction.x, -1.0f, 1.0f);
+			ImGui::DragFloat("Light Intensity", &directionalLightData->intensity, 0.01f, 0.0f, 10.0f);
 			ImGui::End();
 
 			ImGui::Begin("Debug Camera");
