@@ -315,6 +315,37 @@ ComPtr<IDxcBlob> CompileShader(const std::wstring& filePath, const wchar_t* prof
 	return shaderBlob;
 }
 
+// Compile embedded particle HLSL, independent of the working directory.
+// The standalone .hlsl files are included in the ZIP for editing/reference.
+ComPtr<IDxcBlob> CompileParticleShader(const char* source, const wchar_t* profile,
+	IDxcCompiler3* compiler, IDxcIncludeHandler* includeHandler) {
+	DxcBuffer buffer{};
+	buffer.Ptr = source;
+	buffer.Size = strlen(source);
+	buffer.Encoding = DXC_CP_UTF8;
+	LPCWSTR args[] = { L"-E", L"main", L"-T", profile, L"-Zi", L"-Qembed_debug", L"-Od", L"-Zpr" };
+	ComPtr<IDxcResult> result;
+	HRESULT hr = compiler->Compile(&buffer, args, _countof(args), includeHandler,
+		IID_PPV_ARGS(result.GetAddressOf()));
+	if (FAILED(hr) || !result) {
+		Log("Particle shader compiler invocation failed.\n");
+		return nullptr;
+	}
+	ComPtr<IDxcBlobUtf8> errors;
+	result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(errors.GetAddressOf()), nullptr);
+	if (errors && errors->GetStringLength() > 0) {
+		Log(errors->GetStringPointer());
+	}
+	HRESULT status = E_FAIL;
+	result->GetStatus(&status);
+	if (FAILED(status)) return nullptr;
+	ComPtr<IDxcBlob> object;
+	if (FAILED(result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(object.GetAddressOf()), nullptr))) {
+		return nullptr;
+	}
+	return object;
+}
+
 ComPtr<ID3D12Resource> CreateBufferResource(
 	ID3D12Device* device,
 	size_t sizeInBytes)
@@ -1317,11 +1348,102 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 		particleSignatureBlob->GetBufferSize(), IID_PPV_ARGS(particleRootSignature.GetAddressOf()));
 	assert(SUCCEEDED(hr));
 
-	auto particleVS = CompileShader(L"Particle.VS.hlsl", L"vs_6_0",
-		dxcUtils.Get(), dxcCompiler.Get(), includeHandler.Get());
-	auto particlePS = CompileShader(L"Particle.PS.hlsl", L"ps_6_0",
-		dxcUtils.Get(), dxcCompiler.Get(), includeHandler.Get());
-	assert(particleVS && particlePS);
+	// Compile from embedded source so a missing Particle.*.hlsl in the
+	// Visual Studio working directory cannot trigger an assertion.
+	static constexpr char kParticleVS[] = R"PARTICLE_VS(
+#ifndef PARTICLE_HLSLI
+#define PARTICLE_HLSLI
+
+struct TransformationMatrix {
+    float32_t4x4 WVP;
+    float32_t4x4 World;
+};
+
+struct VertexShaderInput {
+    float32_t4 position : POSITION;
+    float32_t2 texcoord : TEXCOORD0;
+    float32_t3 normal : NORMAL0;
+};
+
+struct VertexShaderOutput {
+    float32_t4 position : SV_POSITION;
+    float32_t2 texcoord : TEXCOORD0;
+    float32_t3 normal : NORMAL0;
+};
+
+#endif
+
+
+StructuredBuffer<TransformationMatrix> gTransformationMatrices : register(t0);
+
+VertexShaderOutput main(VertexShaderInput input, uint32_t instanceId : SV_InstanceID)
+{
+    VertexShaderOutput output;
+    output.position = mul(input.position, gTransformationMatrices[instanceId].WVP);
+    output.texcoord = input.texcoord;
+    output.normal = normalize(mul(input.normal,
+        (float32_t3x3)gTransformationMatrices[instanceId].World));
+    return output;
+}
+
+)PARTICLE_VS";
+	static constexpr char kParticlePS[] = R"PARTICLE_PS(
+#ifndef PARTICLE_HLSLI
+#define PARTICLE_HLSLI
+
+struct TransformationMatrix {
+    float32_t4x4 WVP;
+    float32_t4x4 World;
+};
+
+struct VertexShaderInput {
+    float32_t4 position : POSITION;
+    float32_t2 texcoord : TEXCOORD0;
+    float32_t3 normal : NORMAL0;
+};
+
+struct VertexShaderOutput {
+    float32_t4 position : SV_POSITION;
+    float32_t2 texcoord : TEXCOORD0;
+    float32_t3 normal : NORMAL0;
+};
+
+#endif
+
+
+struct Material {
+    float32_t4 color;
+    int32_t enableLighting;
+    float32_t3 padding;
+    float32_t4x4 uvTransform;
+};
+
+ConstantBuffer<Material> gMaterial : register(b0);
+Texture2D<float32_t4> gTexture : register(t0);
+SamplerState gSampler : register(s0);
+
+float32_t4 main(VertexShaderOutput input) : SV_TARGET0
+{
+    float32_t4 transformedUV = mul(float32_t4(input.texcoord, 0.0f, 1.0f),
+        gMaterial.uvTransform);
+    float32_t4 textureColor = gTexture.Sample(gSampler, transformedUV.xy);
+    float32_t4 color = gMaterial.color * textureColor;
+    if (color.a <= 0.0f) {
+        discard;
+    }
+    return color;
+}
+
+)PARTICLE_PS";
+	auto particleVS = CompileParticleShader(kParticleVS, L"vs_6_0",
+		dxcCompiler.Get(), includeHandler.Get());
+	auto particlePS = CompileParticleShader(kParticlePS, L"ps_6_0",
+		dxcCompiler.Get(), includeHandler.Get());
+	if (!particleVS || !particlePS) {
+		MessageBoxA(hwnd, "Particle shader compilation failed. See Visual Studio Output window.",
+			"Particle Shader Error", MB_OK | MB_ICONERROR);
+		return 1;
+	}
 
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC particlePsoDesc{};
 	particlePsoDesc.pRootSignature = particleRootSignature.Get();
