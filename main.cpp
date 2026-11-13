@@ -32,6 +32,7 @@
 #define DIRECTINPUT_VERSION 0x0800
 #include <dinput.h>
 #include "DebugCamera.h"
+#include "BlendMode.h"
 #pragma comment(lib, "dinput8.lib")
 #pragma comment(lib, "dxguid.lib")
 #ifdef USE_IMGUI
@@ -991,16 +992,9 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	inputLayoutDesc.pInputElementDescs = inputElementDescs;
 	inputLayoutDesc.NumElements = _countof(inputElementDescs);
 
-	// NormalBlend (alpha blend): Src * SrcAlpha + Dest * (1 - SrcAlpha)
-	D3D12_BLEND_DESC blendDesc{};
-	blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-	blendDesc.RenderTarget[0].BlendEnable = TRUE;
-	blendDesc.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
-	blendDesc.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
-	blendDesc.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
-	blendDesc.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
-	blendDesc.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
-	blendDesc.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ZERO;
+	// ブレンドモード別のパイプラインを作成する
+	BlendMode currentBlendMode = kBlendModeNormal;
+	ComPtr<ID3D12PipelineState> graphicsPipelineStates[kCountOfBlendMode];
 
 	D3D12_RASTERIZER_DESC rasterizerDesc{};
 	rasterizerDesc.CullMode = D3D12_CULL_MODE_BACK;
@@ -1014,29 +1008,27 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 		msg.message = WM_QUIT;
 	}
 
-	ComPtr<ID3D12PipelineState> graphicsPipelineState;
 	if (msg.message != WM_QUIT) {
-		D3D12_GRAPHICS_PIPELINE_STATE_DESC graphicsPipelineStateDesc{};
-		graphicsPipelineStateDesc.pRootSignature = rootSignature.Get();
-		graphicsPipelineStateDesc.InputLayout = inputLayoutDesc;
-		graphicsPipelineStateDesc.VS = { vertexShaderBlob->GetBufferPointer(), vertexShaderBlob->GetBufferSize() };
-		graphicsPipelineStateDesc.PS = { pixelShaderBlob->GetBufferPointer(), pixelShaderBlob->GetBufferSize() };
-		graphicsPipelineStateDesc.RasterizerState = rasterizerDesc;
-		graphicsPipelineStateDesc.BlendState = blendDesc;
-		graphicsPipelineStateDesc.NumRenderTargets = 1;
-
-		graphicsPipelineStateDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
-
-		graphicsPipelineStateDesc.DepthStencilState.DepthEnable = TRUE;
-		graphicsPipelineStateDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
-		graphicsPipelineStateDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
-		graphicsPipelineStateDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
-
-		graphicsPipelineStateDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-		graphicsPipelineStateDesc.SampleDesc.Count = 1;
-		graphicsPipelineStateDesc.SampleMask = D3D12_DEFAULT_SAMPLE_MASK;
-		hr = device->CreateGraphicsPipelineState(&graphicsPipelineStateDesc, IID_PPV_ARGS(graphicsPipelineState.GetAddressOf()));
-		assert(SUCCEEDED(hr));
+		for (int32_t mode = 0; mode < kCountOfBlendMode; ++mode) {
+			D3D12_GRAPHICS_PIPELINE_STATE_DESC graphicsPipelineStateDesc{};
+			graphicsPipelineStateDesc.pRootSignature = rootSignature.Get();
+			graphicsPipelineStateDesc.InputLayout = inputLayoutDesc;
+			graphicsPipelineStateDesc.VS = { vertexShaderBlob->GetBufferPointer(), vertexShaderBlob->GetBufferSize() };
+			graphicsPipelineStateDesc.PS = { pixelShaderBlob->GetBufferPointer(), pixelShaderBlob->GetBufferSize() };
+			graphicsPipelineStateDesc.RasterizerState = rasterizerDesc;
+			graphicsPipelineStateDesc.BlendState = CreateBlendDesc(static_cast<BlendMode>(mode));
+			graphicsPipelineStateDesc.NumRenderTargets = 1;
+			graphicsPipelineStateDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+			graphicsPipelineStateDesc.DepthStencilState.DepthEnable = TRUE;
+			graphicsPipelineStateDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+			graphicsPipelineStateDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+			graphicsPipelineStateDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+			graphicsPipelineStateDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+			graphicsPipelineStateDesc.SampleDesc.Count = 1;
+			graphicsPipelineStateDesc.SampleMask = D3D12_DEFAULT_SAMPLE_MASK;
+			hr = device->CreateGraphicsPipelineState(&graphicsPipelineStateDesc, IID_PPV_ARGS(graphicsPipelineStates[mode].GetAddressOf()));
+			assert(SUCCEEDED(hr));
+		}
 	}
 
 	D3D12_VERTEX_BUFFER_VIEW vertexBufferView{};
@@ -1306,6 +1298,11 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			ImGui::SliderFloat3("Model Rotate", &transform.rotate.x, -float(M_PI), float(M_PI));
 			ImGui::SliderFloat3("Model Translate", &transform.translate.x, -10.0f, 10.0f);
 			ImGui::ColorEdit4("Model Color", &materialData->color.x); // alpha = transparency
+			const char* blendModeNames[] = { "None", "Normal", "Add", "Subtract", "Multiply", "Screen" };
+			int selectedBlendMode = static_cast<int>(currentBlendMode);
+			if (ImGui::Combo("Blend Mode", &selectedBlendMode, blendModeNames, kCountOfBlendMode)) {
+				currentBlendMode = static_cast<BlendMode>(selectedBlendMode);
+			}
 			bool lightingEnabled = (materialData->enableLighting != 0);
 			if (ImGui::Checkbox("Enable Lighting", &lightingEnabled)) {
 				materialData->enableLighting = lightingEnabled ? 1 : 0;
@@ -1387,7 +1384,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			commandList->RSSetViewports(1, &viewport);
 			commandList->RSSetScissorRects(1, &scissorRect);
 			commandList->SetGraphicsRootSignature(rootSignature.Get());
-			commandList->SetPipelineState(graphicsPipelineState.Get());
+			commandList->SetPipelineState(graphicsPipelineStates[currentBlendMode].Get());
 
 			// 1. 3Dモデルの描画
 			commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
