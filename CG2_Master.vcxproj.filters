@@ -89,5 +89,14 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Object3d.hlsli" />
+    <None Include="Particle.hlsli">
+      <Filter>リソース ファイル</Filter>
+    </None>
+    <None Include="Particle.PS.hlsli">
+      <Filter>リソース ファイル</Filter>
+    </None>
+    <None Include="Particle.VS.hlsli">
+      <Filter>リソース ファイル</Filter>
+    </None>
   </ItemGroup>
 </Project>

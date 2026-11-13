@@ -951,7 +951,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	descriptionRootSignature.NumStaticSamplers = 1;
 
 	// --- モデル読み込み ---
-	ModelData modelData = LoadObjFile("resources", "fence.obj");
+	ModelData modelData = LoadObjFile("resources", "plane.obj");
 	assert(!modelData.vertices.empty());
 
 	ComPtr<ID3D12Resource> vertexResource = CreateBufferResource(device.Get(), sizeof(VertexData) * modelData.vertices.size());
@@ -993,7 +993,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	inputLayoutDesc.NumElements = _countof(inputElementDescs);
 
 	// ブレンドモード別のパイプラインを作成する
-	BlendMode currentBlendMode = kBlendModeNone;
+	BlendMode currentBlendMode = kBlendModeNormal;
 	ComPtr<ID3D12PipelineState> graphicsPipelineStates[kCountOfBlendMode];
 
 	D3D12_RASTERIZER_DESC rasterizerDesc{};
@@ -1221,6 +1221,131 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	directionalLightData->direction = { 0.0f, -1.0f, 0.0f };
 	directionalLightData->intensity = 1.0f;
 
+
+	// ================= Particle Instancing =================
+	constexpr uint32_t kNumInstance = 10;
+	Transform particleTransforms[kNumInstance]{};
+	for (uint32_t i = 0; i < kNumInstance; ++i) {
+		particleTransforms[i].scale = { 1.0f, 1.0f, 1.0f };
+		particleTransforms[i].rotate = { 0.0f, 0.0f, 0.0f };
+		particleTransforms[i].translate = { float(i) * 0.1f, float(i) * 0.1f, float(i) * 0.1f };
+	}
+
+	// 6 vertices for a double-sided-independent front-facing quad.
+	const VertexData particleVertices[] = {
+		{ { -1.0f,  1.0f, 0.0f, 1.0f },{ 0.0f, 0.0f },{ 0.0f, 0.0f, -1.0f } },
+		{ { 1.0f,  1.0f, 0.0f, 1.0f },{ 1.0f, 0.0f },{ 0.0f, 0.0f, -1.0f } },
+		{ { -1.0f, -1.0f, 0.0f, 1.0f },{ 0.0f, 1.0f },{ 0.0f, 0.0f, -1.0f } },
+		{ { -1.0f, -1.0f, 0.0f, 1.0f },{ 0.0f, 1.0f },{ 0.0f, 0.0f, -1.0f } },
+		{ { 1.0f,  1.0f, 0.0f, 1.0f },{ 1.0f, 0.0f },{ 0.0f, 0.0f, -1.0f } },
+		{ { 1.0f, -1.0f, 0.0f, 1.0f },{ 1.0f, 1.0f },{ 0.0f, 0.0f, -1.0f } }
+	};
+	auto particleVertexResource = CreateBufferResource(device.Get(), sizeof(particleVertices));
+	VertexData* particleVertexData = nullptr;
+	particleVertexResource->Map(0, nullptr, reinterpret_cast<void**>(&particleVertexData));
+	std::memcpy(particleVertexData, particleVertices, sizeof(particleVertices));
+	particleVertexResource->Unmap(0, nullptr);
+	D3D12_VERTEX_BUFFER_VIEW particleVertexBufferView{};
+	particleVertexBufferView.BufferLocation = particleVertexResource->GetGPUVirtualAddress();
+	particleVertexBufferView.SizeInBytes = sizeof(particleVertices);
+	particleVertexBufferView.StrideInBytes = sizeof(VertexData);
+
+	auto particleMaterialResource = CreateBufferResource(device.Get(), sizeof(Material));
+	Material* particleMaterialData = nullptr;
+	particleMaterialResource->Map(0, nullptr, reinterpret_cast<void**>(&particleMaterialData));
+	particleMaterialData->color = { 1.0f, 1.0f, 1.0f, 1.0f };
+	particleMaterialData->enableLighting = 0;
+	particleMaterialData->uvTransform = MakeIdentity4x4();
+
+	auto instancingResource = CreateBufferResource(device.Get(), sizeof(TransformationMatrix) * kNumInstance);
+	TransformationMatrix* instancingData = nullptr;
+	instancingResource->Map(0, nullptr, reinterpret_cast<void**>(&instancingData));
+	for (uint32_t i = 0; i < kNumInstance; ++i) {
+		instancingData[i].WVP = MakeIdentity4x4();
+		instancingData[i].World = MakeIdentity4x4();
+	}
+
+	// SRV t0 (vertex shader) for the structured buffer.
+	D3D12_SHADER_RESOURCE_VIEW_DESC instancingSrvDesc{};
+	instancingSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
+	instancingSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+	instancingSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+	instancingSrvDesc.Buffer.FirstElement = 0;
+	instancingSrvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+	instancingSrvDesc.Buffer.NumElements = kNumInstance;
+	instancingSrvDesc.Buffer.StructureByteStride = sizeof(TransformationMatrix);
+	D3D12_CPU_DESCRIPTOR_HANDLE instancingSrvHandleCPU =
+		GetCPUDescriptorHandle(srvDescriptorHeap.Get(), descriptorSizeSRV, 3);
+	D3D12_GPU_DESCRIPTOR_HANDLE instancingSrvHandleGPU =
+		GetGPUDescriptorHandle(srvDescriptorHeap.Get(), descriptorSizeSRV, 3);
+	device->CreateShaderResourceView(instancingResource.Get(), &instancingSrvDesc, instancingSrvHandleCPU);
+
+	// Particle has a separate root signature. VS t0 is the structured buffer.
+	D3D12_DESCRIPTOR_RANGE particleRanges[2]{};
+	particleRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+	particleRanges[0].NumDescriptors = 1;
+	particleRanges[0].BaseShaderRegister = 0;
+	particleRanges[0].OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+	particleRanges[1] = particleRanges[0];
+
+	D3D12_ROOT_PARAMETER particleRootParameters[3]{};
+	particleRootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+	particleRootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+	particleRootParameters[0].Descriptor.ShaderRegister = 0;
+	particleRootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+	particleRootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+	particleRootParameters[1].DescriptorTable.pDescriptorRanges = &particleRanges[0];
+	particleRootParameters[1].DescriptorTable.NumDescriptorRanges = 1;
+	particleRootParameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+	particleRootParameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+	particleRootParameters[2].DescriptorTable.pDescriptorRanges = &particleRanges[1];
+	particleRootParameters[2].DescriptorTable.NumDescriptorRanges = 1;
+
+	D3D12_ROOT_SIGNATURE_DESC particleRootDesc{};
+	particleRootDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+	particleRootDesc.NumParameters = _countof(particleRootParameters);
+	particleRootDesc.pParameters = particleRootParameters;
+	particleRootDesc.NumStaticSamplers = 1;
+	particleRootDesc.pStaticSamplers = &staticSampler;
+	ComPtr<ID3DBlob> particleSignatureBlob;
+	ComPtr<ID3DBlob> particleSignatureError;
+	hr = D3D12SerializeRootSignature(&particleRootDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+		&particleSignatureBlob, &particleSignatureError);
+	assert(SUCCEEDED(hr));
+	ComPtr<ID3D12RootSignature> particleRootSignature;
+	hr = device->CreateRootSignature(0, particleSignatureBlob->GetBufferPointer(),
+		particleSignatureBlob->GetBufferSize(), IID_PPV_ARGS(particleRootSignature.GetAddressOf()));
+	assert(SUCCEEDED(hr));
+
+	auto particleVS = CompileShader(L"Particle.VS.hlsl", L"vs_6_0",
+		dxcUtils.Get(), dxcCompiler.Get(), includeHandler.Get());
+	auto particlePS = CompileShader(L"Particle.PS.hlsl", L"ps_6_0",
+		dxcUtils.Get(), dxcCompiler.Get(), includeHandler.Get());
+	assert(particleVS && particlePS);
+
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC particlePsoDesc{};
+	particlePsoDesc.pRootSignature = particleRootSignature.Get();
+	particlePsoDesc.InputLayout = inputLayoutDesc;
+	particlePsoDesc.VS = { particleVS->GetBufferPointer(), particleVS->GetBufferSize() };
+	particlePsoDesc.PS = { particlePS->GetBufferPointer(), particlePS->GetBufferSize() };
+	particlePsoDesc.RasterizerState = rasterizerDesc;
+	particlePsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+	particlePsoDesc.BlendState = CreateBlendDesc(kBlendModeNormal);
+	particlePsoDesc.NumRenderTargets = 1;
+	particlePsoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+	particlePsoDesc.DepthStencilState.DepthEnable = TRUE;
+	particlePsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+	particlePsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+	particlePsoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+	particlePsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+	particlePsoDesc.SampleDesc.Count = 1;
+	particlePsoDesc.SampleMask = D3D12_DEFAULT_SAMPLE_MASK;
+	ComPtr<ID3D12PipelineState> particlePipelineState;
+	hr = device->CreateGraphicsPipelineState(&particlePsoDesc,
+		IID_PPV_ARGS(particlePipelineState.GetAddressOf()));
+	assert(SUCCEEDED(hr));
+	// ================= End Particle Instancing =================
+
 	ComPtr<ID3D12Resource> indexResourceSprite = CreateBufferResource(device.Get(), sizeof(uint32_t) * 6);
 
 	D3D12_INDEX_BUFFER_VIEW indexBufferViewSprite{};
@@ -1362,6 +1487,16 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			// 回転
 			//transform.rotate.y += 0.0025f;
 
+			// Per-instance world and WVP matrices (one DrawInstanced call).
+			for (uint32_t i = 0; i < kNumInstance; ++i) {
+				Matrix4x4 particleWorld = MakeAffineMatrix(
+					particleTransforms[i].scale, particleTransforms[i].rotate,
+					particleTransforms[i].translate);
+				instancingData[i].WVP = Multiply(
+					particleWorld, Multiply(viewMatrix, projectionMatrix));
+				instancingData[i].World = particleWorld;
+			}
+
 			// 2Dスプライトの行列更新
 			Matrix4x4 worldMatrixSprite = MakeAffineMatrix(transformSprite.scale, transformSprite.rotate, transformSprite.translate);
 			Matrix4x4 viewMatrixSprite = MakeIdentity4x4();
@@ -1396,6 +1531,17 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 			commandList->SetGraphicsRootConstantBufferView(3, directionalLightResource->GetGPUVirtualAddress());
 			// 描画する頂点数はModelDataの頂点数
 			commandList->DrawInstanced(UINT(modelData.vertices.size()), 1, 0, 0);
+
+			// Particle: bind structured buffer SRV and draw 10 instances in one call.
+			commandList->SetGraphicsRootSignature(particleRootSignature.Get());
+			commandList->SetPipelineState(particlePipelineState.Get());
+			commandList->IASetVertexBuffers(0, 1, &particleVertexBufferView);
+			commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			commandList->SetGraphicsRootConstantBufferView(0,
+				particleMaterialResource->GetGPUVirtualAddress());
+			commandList->SetGraphicsRootDescriptorTable(1, instancingSrvHandleGPU);
+			commandList->SetGraphicsRootDescriptorTable(2, textureSrvHandleGPU);
+			commandList->DrawInstanced(6, kNumInstance, 0, 0);
 
 			// 2. 2Dスプライトの描画
 			/*commandList->IASetVertexBuffers(0, 1, &vertexBufferViewSprite);
