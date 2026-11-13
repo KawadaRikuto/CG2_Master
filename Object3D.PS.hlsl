@@ -40,12 +40,18 @@ PixelShaderOutput main(PixelShaderInput input)
 
     float32_t4 textureColor = gTexture.Sample(gSampler, transformedUV.xy);
 
+    // Binary alpha: reject pixels whose effective alpha is at most 0.5.
+    // Discarded pixels write neither color nor depth.
+    float alpha = textureColor.a * gMaterial.color.a;
+    if (alpha <= 0.5f)
+    {
+        discard;
+    }
+
     if (gMaterial.enableLighting != 0)
     {
         float NdotL = dot(normalize(input.normal), -normalize(gDirectionalLight.direction));
         float cosLight = pow(NdotL * 0.5f + 0.5f, 2.0f);
-
-        // Light RGB only. Alpha must be independent of light intensity.
         output.color.rgb =
             textureColor.rgb * gMaterial.color.rgb *
             gDirectionalLight.color.rgb * gDirectionalLight.intensity * cosLight;
@@ -55,8 +61,6 @@ PixelShaderOutput main(PixelShaderInput input)
         output.color.rgb = textureColor.rgb * gMaterial.color.rgb;
     }
 
-    // Alpha is controlled by material color (and source texture alpha).
-    output.color.a = textureColor.a * gMaterial.color.a;
-
+    output.color.a = alpha;
     return output;
 }

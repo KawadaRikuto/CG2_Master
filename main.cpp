@@ -951,7 +951,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	descriptionRootSignature.NumStaticSamplers = 1;
 
 	// --- モデル読み込み ---
-	ModelData modelData = LoadObjFile("resources", "plane.obj");
+	ModelData modelData = LoadObjFile("resources", "fence.obj");
 	assert(!modelData.vertices.empty());
 
 	ComPtr<ID3D12Resource> vertexResource = CreateBufferResource(device.Get(), sizeof(VertexData) * modelData.vertices.size());
@@ -993,7 +993,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	inputLayoutDesc.NumElements = _countof(inputElementDescs);
 
 	// ブレンドモード別のパイプラインを作成する
-	BlendMode currentBlendMode = kBlendModeNormal;
+	BlendMode currentBlendMode = kBlendModeNone;
 	ComPtr<ID3D12PipelineState> graphicsPipelineStates[kCountOfBlendMode];
 
 	D3D12_RASTERIZER_DESC rasterizerDesc{};
