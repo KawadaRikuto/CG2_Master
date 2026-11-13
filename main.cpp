@@ -43,6 +43,8 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 #endif
 #include <vector>
 #include <cstring>
+#include <random>
+#include <algorithm>
 #pragma warning(pop)
 
 using Microsoft::WRL::ComPtr;
@@ -68,6 +70,8 @@ struct Vector4 {
 struct Matrix4x4 {
 	float m[4][4];
 };
+
+#include "ParticleShowcase.h"
 
 struct Transform {
 	Vector3 scale;
@@ -799,7 +803,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	AdjustWindowRect(&wrc, WS_OVERLAPPEDWINDOW, false);
 
 	HWND hwnd = CreateWindow(
-		wc.lpszClassName, L"CG2", WS_OVERLAPPEDWINDOW,
+		wc.lpszClassName, L"LE2C_08_カワダ_リクト", WS_OVERLAPPEDWINDOW,
 		CW_USEDEFAULT, CW_USEDEFAULT, wrc.right - wrc.left, wrc.bottom - wrc.top,
 		nullptr, nullptr, wc.hInstance, nullptr
 	);
@@ -1254,12 +1258,21 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 
 
 	// ================= Particle Instancing =================
-	constexpr uint32_t kNumInstance = 10;
+	constexpr uint32_t kNumInstance = 512;
+	ParticleShowcase showcase;
+	bool showBaseModel = false;
+	bool particlePaused = false;
+	float particleSpeed = 1.0f;
+	float particleSize = 0.12f;
+	int activeParticleCount = 384;
+	int effectMode = 0;
+	float particleTime = 0.0f;
+	auto particleLastFrame = std::chrono::steady_clock::now();
 	Transform particleTransforms[kNumInstance]{};
 	for (uint32_t i = 0; i < kNumInstance; ++i) {
-		particleTransforms[i].scale = { 1.0f, 1.0f, 1.0f };
+		particleTransforms[i].scale = { 0.12f, 0.12f, 0.12f };
 		particleTransforms[i].rotate = { 0.0f, 0.0f, 0.0f };
-		particleTransforms[i].translate = { float(i) * 0.1f, float(i) * 0.1f, float(i) * 0.1f };
+		particleTransforms[i].translate = { 0.0f, 0.0f, 0.0f };
 	}
 
 	// 6 vertices for a double-sided-independent front-facing quad.
@@ -1288,12 +1301,13 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	particleMaterialData->enableLighting = 0;
 	particleMaterialData->uvTransform = MakeIdentity4x4();
 
-	auto instancingResource = CreateBufferResource(device.Get(), sizeof(TransformationMatrix) * kNumInstance);
-	TransformationMatrix* instancingData = nullptr;
+	auto instancingResource = CreateBufferResource(device.Get(), sizeof(ShowcaseInstance) * kNumInstance);
+	ShowcaseInstance* instancingData = nullptr;
 	instancingResource->Map(0, nullptr, reinterpret_cast<void**>(&instancingData));
 	for (uint32_t i = 0; i < kNumInstance; ++i) {
 		instancingData[i].WVP = MakeIdentity4x4();
 		instancingData[i].World = MakeIdentity4x4();
+		instancingData[i].color = { 1, 1, 1, 1 };
 	}
 
 	// SRV t0 (vertex shader) for the structured buffer.
@@ -1304,7 +1318,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	instancingSrvDesc.Buffer.FirstElement = 0;
 	instancingSrvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
 	instancingSrvDesc.Buffer.NumElements = kNumInstance;
-	instancingSrvDesc.Buffer.StructureByteStride = sizeof(TransformationMatrix);
+	instancingSrvDesc.Buffer.StructureByteStride = sizeof(ShowcaseInstance);
 	D3D12_CPU_DESCRIPTOR_HANDLE instancingSrvHandleCPU =
 		GetCPUDescriptorHandle(srvDescriptorHeap.Get(), descriptorSizeSRV, 3);
 	D3D12_GPU_DESCRIPTOR_HANDLE instancingSrvHandleGPU =
@@ -1351,87 +1365,37 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	// Compile from embedded source so a missing Particle.*.hlsl in the
 	// Visual Studio working directory cannot trigger an assertion.
 	static constexpr char kParticleVS[] = R"PARTICLE_VS(
-#ifndef PARTICLE_HLSLI
-#define PARTICLE_HLSLI
-
-struct TransformationMatrix {
-    float32_t4x4 WVP;
-    float32_t4x4 World;
-};
-
-struct VertexShaderInput {
-    float32_t4 position : POSITION;
-    float32_t2 texcoord : TEXCOORD0;
-    float32_t3 normal : NORMAL0;
-};
-
-struct VertexShaderOutput {
-    float32_t4 position : SV_POSITION;
-    float32_t2 texcoord : TEXCOORD0;
-    float32_t3 normal : NORMAL0;
-};
-
-#endif
-
-
+struct TransformationMatrix { float32_t4x4 WVP; float32_t4x4 World; float32_t4 color; };
+struct VertexShaderInput { float32_t4 position : POSITION; float32_t2 texcoord : TEXCOORD0; float32_t3 normal : NORMAL0; };
+struct VertexShaderOutput { float32_t4 position : SV_POSITION; float32_t2 texcoord : TEXCOORD0; float32_t3 normal : NORMAL0; float32_t4 color : COLOR0; };
 StructuredBuffer<TransformationMatrix> gTransformationMatrices : register(t0);
-
-VertexShaderOutput main(VertexShaderInput input, uint32_t instanceId : SV_InstanceID)
-{
+VertexShaderOutput main(VertexShaderInput input, uint32_t instanceId : SV_InstanceID) {
     VertexShaderOutput output;
     output.position = mul(input.position, gTransformationMatrices[instanceId].WVP);
     output.texcoord = input.texcoord;
-    output.normal = normalize(mul(input.normal,
-        (float32_t3x3)gTransformationMatrices[instanceId].World));
+    output.normal = input.normal;
+    output.color = gTransformationMatrices[instanceId].color;
     return output;
 }
 
 )PARTICLE_VS";
 	static constexpr char kParticlePS[] = R"PARTICLE_PS(
-#ifndef PARTICLE_HLSLI
-#define PARTICLE_HLSLI
-
-struct TransformationMatrix {
-    float32_t4x4 WVP;
-    float32_t4x4 World;
-};
-
-struct VertexShaderInput {
-    float32_t4 position : POSITION;
-    float32_t2 texcoord : TEXCOORD0;
-    float32_t3 normal : NORMAL0;
-};
-
-struct VertexShaderOutput {
-    float32_t4 position : SV_POSITION;
-    float32_t2 texcoord : TEXCOORD0;
-    float32_t3 normal : NORMAL0;
-};
-
-#endif
-
-
-struct Material {
-    float32_t4 color;
-    int32_t enableLighting;
-    float32_t3 padding;
-    float32_t4x4 uvTransform;
-};
-
+struct TransformationMatrix { float32_t4x4 WVP; float32_t4x4 World; float32_t4 color; };
+struct VertexShaderInput { float32_t4 position : POSITION; float32_t2 texcoord : TEXCOORD0; float32_t3 normal : NORMAL0; };
+struct VertexShaderOutput { float32_t4 position : SV_POSITION; float32_t2 texcoord : TEXCOORD0; float32_t3 normal : NORMAL0; float32_t4 color : COLOR0; };
+struct Material { float32_t4 color; int32_t enableLighting; float32_t3 padding; float32_t4x4 uvTransform; };
 ConstantBuffer<Material> gMaterial : register(b0);
 Texture2D<float32_t4> gTexture : register(t0);
 SamplerState gSampler : register(s0);
-
-float32_t4 main(VertexShaderOutput input) : SV_TARGET0
-{
-    float32_t4 transformedUV = mul(float32_t4(input.texcoord, 0.0f, 1.0f),
-        gMaterial.uvTransform);
-    float32_t4 textureColor = gTexture.Sample(gSampler, transformedUV.xy);
-    float32_t4 color = gMaterial.color * textureColor;
-    if (color.a <= 0.0f) {
-        discard;
-    }
-    return color;
+float32_t4 main(VertexShaderOutput input) : SV_TARGET0 {
+    float32_t2 uv = input.texcoord * 2.0f - 1.0f;
+    float d = length(uv);
+    float glow = saturate(1.0f - d);
+    float core = pow(glow, 2.3f);
+    float alpha = core * input.color.a;
+    if (alpha < 0.012f) discard;
+    float3 rgb = input.color.rgb * (0.7f + 0.3f * pow(glow, 0.5f));
+    return float32_t4(rgb, alpha);
 }
 
 )PARTICLE_PS";
@@ -1452,7 +1416,7 @@ float32_t4 main(VertexShaderOutput input) : SV_TARGET0
 	particlePsoDesc.PS = { particlePS->GetBufferPointer(), particlePS->GetBufferSize() };
 	particlePsoDesc.RasterizerState = rasterizerDesc;
 	particlePsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-	particlePsoDesc.BlendState = CreateBlendDesc(kBlendModeNormal);
+	particlePsoDesc.BlendState = CreateBlendDesc(kBlendModeAdd);
 	particlePsoDesc.NumRenderTargets = 1;
 	particlePsoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
 	particlePsoDesc.DepthStencilState.DepthEnable = TRUE;
@@ -1516,6 +1480,7 @@ float32_t4 main(VertexShaderOutput input) : SV_TARGET0
 	DebugCamera debugCamera;
 	debugCamera.Initialize(kClientWidth, kClientHeight, hwnd);
 
+	BYTE previousParticleKeys[256] = {};
 	// メインループ
 	while (msg.message != WM_QUIT) {
 		if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -1533,12 +1498,64 @@ float32_t4 main(VertexShaderOutput input) : SV_TARGET0
 			if (SUCCEEDED(hr)) {
 				debugCamera.Update(key);
 			}
+			if (key[DIK_SPACE] && !previousParticleKeys[DIK_SPACE]) particlePaused = !particlePaused;
+			if (key[DIK_1] && !previousParticleKeys[DIK_1]) { effectMode = 0; showcase.Reset(); }
+			if (key[DIK_2] && !previousParticleKeys[DIK_2]) { effectMode = 1; showcase.Reset(); }
+			if (key[DIK_3] && !previousParticleKeys[DIK_3]) { effectMode = 2; showcase.Reset(); }
+			if (key[DIK_R] && !previousParticleKeys[DIK_R]) { showcase.Reset(); particleTime = 0.0f; }
+			std::memcpy(previousParticleKeys, key, sizeof(key));
+			auto particleNow = std::chrono::steady_clock::now();
+			float particleDelta = std::chrono::duration<float>(particleNow - particleLastFrame).count();
+			particleLastFrame = particleNow;
+			particleDelta = (particleDelta < 0.05f ? particleDelta : 0.05f);
+			if (!particlePaused) particleTime += particleDelta * particleSpeed;
+
 #ifdef USE_IMGUI
 			ImGui_ImplDX12_NewFrame();
 			ImGui_ImplWin32_NewFrame();
 			ImGui::NewFrame();
 			ImGui::ShowDemoWindow();
 
+
+			ImGui::Begin("PARTICLE SHOWCASE");
+			ImGui::Text("Interactive VFX demo / 1 draw call");
+			const char* effectNames[] = { "Fireworks", "Fountain", "Galaxy" };
+			ImGui::Combo("Effect", &effectMode, effectNames, IM_ARRAYSIZE(effectNames));
+			ImGui::SliderInt("Particles", &activeParticleCount, 16, int(kNumInstance));
+			ImGui::SliderFloat("Speed", &particleSpeed, 0.1f, 3.0f);
+			ImGui::SliderFloat("Size", &particleSize, 0.025f, 0.35f);
+			ImGui::Checkbox("Pause", &particlePaused);
+			ImGui::Checkbox("Show original model", &showBaseModel);
+			if (ImGui::Button("Restart effect")) { showcase.Reset(); particleTime = 0.0f; }
+			ImGui::Text("Space: pause | 1/2/3: effect | R: restart");
+			ImGui::Text("Instanced particles: %d / %u", activeParticleCount, kNumInstance);
+			ImGui::End();
+
+			// Always-visible operation guide, independent of the settings window.
+			ImGui::SetNextWindowPos(ImVec2(14.0f, 14.0f), ImGuiCond_Always);
+			ImGui::SetNextWindowBgAlpha(0.72f);
+			const ImGuiWindowFlags guideFlags =
+				ImGuiWindowFlags_NoTitleBar |
+				ImGuiWindowFlags_NoResize |
+				ImGuiWindowFlags_AlwaysAutoResize |
+				ImGuiWindowFlags_NoMove |
+				ImGuiWindowFlags_NoSavedSettings |
+				ImGuiWindowFlags_NoFocusOnAppearing |
+				ImGuiWindowFlags_NoNav |
+				ImGuiWindowFlags_NoInputs;
+			ImGui::Begin("Particle Controls HUD", nullptr, guideFlags);
+			ImGui::TextUnformatted("PARTICLE CONTROLS");
+			ImGui::Separator();
+			ImGui::TextUnformatted("1      : Fireworks");
+			ImGui::TextUnformatted("2      : Fountain");
+			ImGui::TextUnformatted("3      : Galaxy");
+			ImGui::TextUnformatted("Space  : Pause / Resume");
+			ImGui::Separator();
+			const char* activeEffectName = effectMode == 0 ? "Fireworks" :
+				(effectMode == 1 ? "Fountain" : "Galaxy");
+			ImGui::Text("Current: %s", activeEffectName);
+			ImGui::Text("State: %s", particlePaused ? "Paused" : "Playing");
+			ImGui::End();
 
 			ImGui::Begin("Model Settings");
 			ImGui::SliderFloat3("Model Scale", &transform.scale.x, 0.1f, 5.0f);
@@ -1609,14 +1626,17 @@ float32_t4 main(VertexShaderOutput input) : SV_TARGET0
 			// 回転
 			//transform.rotate.y += 0.0025f;
 
-			// Per-instance world and WVP matrices (one DrawInstanced call).
+			// Procedural animation. Each instance has its own position and color.
+			showcase.Update(effectMode, particleTime, activeParticleCount, particleSize);
 			for (uint32_t i = 0; i < kNumInstance; ++i) {
+				const ShowcaseParticle& particle = showcase.particles[i];
 				Matrix4x4 particleWorld = MakeAffineMatrix(
-					particleTransforms[i].scale, particleTransforms[i].rotate,
-					particleTransforms[i].translate);
-				instancingData[i].WVP = Multiply(
-					particleWorld, Multiply(viewMatrix, projectionMatrix));
+					{ particle.size, particle.size, particle.size },
+					{ 0.0f, 0.0f, 0.0f },
+					{ particle.x, particle.y, particle.z });
+				instancingData[i].WVP = Multiply(particleWorld, Multiply(viewMatrix, projectionMatrix));
 				instancingData[i].World = particleWorld;
+				instancingData[i].color = { particle.r, particle.g, particle.b, particle.a };
 			}
 
 			// 2Dスプライトの行列更新
@@ -1652,7 +1672,7 @@ float32_t4 main(VertexShaderOutput input) : SV_TARGET0
 			commandList->SetGraphicsRootDescriptorTable(2, textureSrvHandleGPU);
 			commandList->SetGraphicsRootConstantBufferView(3, directionalLightResource->GetGPUVirtualAddress());
 			// 描画する頂点数はModelDataの頂点数
-			commandList->DrawInstanced(UINT(modelData.vertices.size()), 1, 0, 0);
+			if (showBaseModel) commandList->DrawInstanced(UINT(modelData.vertices.size()), 1, 0, 0);
 
 			// Particle: bind structured buffer SRV and draw 10 instances in one call.
 			commandList->SetGraphicsRootSignature(particleRootSignature.Get());
@@ -1663,7 +1683,7 @@ float32_t4 main(VertexShaderOutput input) : SV_TARGET0
 				particleMaterialResource->GetGPUVirtualAddress());
 			commandList->SetGraphicsRootDescriptorTable(1, instancingSrvHandleGPU);
 			commandList->SetGraphicsRootDescriptorTable(2, textureSrvHandleGPU);
-			commandList->DrawInstanced(6, kNumInstance, 0, 0);
+			commandList->DrawInstanced(6, static_cast<UINT>(activeParticleCount), 0, 0);
 
 			// 2. 2Dスプライトの描画
 			/*commandList->IASetVertexBuffers(0, 1, &vertexBufferViewSprite);
